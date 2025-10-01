@@ -34,8 +34,6 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const actualFrontendPath = path.join(process.cwd(), "frontend", "dist");
-
 dotenv.config({ path: path.join(__dirname, ".env") });
 const stripe = new Stripe(STRIPE_SECRET_KEY);
 const twilioClient = Twilio(ACCOUNT_SSD, AUTH_TOKEN);
@@ -307,10 +305,6 @@ app.post("/api/create-checkout-session", verifyToken, async (req, res) => {
     console.error("❌ Error creating checkout session:", error.message);
     res.status(500).json({ error: "No se pudo crear la sesión de pago" });
   }
-});
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(actualFrontendPath, "index.html"));
 });
 
 app.use((req, res, next) => {
