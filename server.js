@@ -2,9 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import passport from "passport";
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
 import Stripe from "stripe";
 import errorHandler from "./backend/errorHandler.js";
@@ -48,6 +46,25 @@ if (NODE_ENV === "production") {
 app.use(
   cors({
     origin: FRONTEND_URL, // React Dev Server
+    credentials: true,
+  })
+);
+
+// Permitir solo tu dominio de frontend
+const allowedOrigins = [
+  "https://cafearomadelaserrania.onrender.com",
+  "http://localhost:5173",
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("No permitido por CORS"));
+      }
+    },
     credentials: true,
   })
 );
