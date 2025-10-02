@@ -99,41 +99,78 @@ app.post(
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
+      // Depurar datos relevantes del objeto session
+      console.log(
+        "🔍 session.shipping_details:",
+        JSON.stringify(session.shipping_details, null, 2)
+      );
+      console.log(
+        "🔍 session.customer_details:",
+        JSON.stringify(session.customer_details, null, 2)
+      );
+      console.log(
+        "🔍 session.shipping:",
+        JSON.stringify(session.shipping, null, 2)
+      );
+
+      // Obtener detalles de los ítems comprados
+      let productData, priceId, price, product;
       try {
-        // 1. Obtener line items comprados
         const lineItems = await stripe.checkout.sessions.listLineItems(
           session.id,
-          { expand: ["data.price.product"] }
+          {
+            expand: ["data.price.product"],
+          }
         );
+        productData = lineItems.data[0];
+        priceId = productData.price.id;
+        price = productData.price;
+        product = price.product;
+      } catch (err) {
+        console.error("❌ Error obteniendo lineItems:", err.message);
+        return res
+          .status(500)
+          .json({ error: "Error obteniendo ítems de la compra" });
+      }
 
-        const productData = lineItems.data[0];
-        const product = productData.price.product;
-
-        // 2. Buscar teléfono del usuario en DB
+      // Obtener datos de la dirección
+      const shippingAddress = session.customer_details?.address || {};
+      console.log(
+        "🔍 shippingAddress:",
+        JSON.stringify(shippingAddress, null, 2)
+      );
+      // Obtener el teléfono del usuario registrado desde la tabla users
+      let phone = null;
+      try {
         const userResult = await pool.query(
           `SELECT phone_number FROM users WHERE id = $1`,
           [parseInt(session.metadata.user_id)]
         );
-        const phone = userResult.rows[0]?.phone_number || null;
-
-        // Formatear la dirección para el SMS
-        const addressString =
-          shippingAddress.line1 && shippingAddress.city
-            ? `${shippingAddress.line1}, ${shippingAddress.city}, ${
-                shippingAddress.country || ""
-              }`
-            : "No disponible";
-
-        // 3. Guardar compra en DB
-        const shippingAddress = session.customer_details?.address || {};
+        phone = userResult.rows[0]?.phone_number || null;
+        console.log("🔍 user.phone_number from DB:", phone);
+      } catch (dbError) {
+        console.error(
+          "❌ Error obteniendo teléfono del usuario:",
+          dbError.message
+        );
+      }
+      // Formatear la dirección para el SMS
+      const addressString =
+        shippingAddress.line1 && shippingAddress.city
+          ? `${shippingAddress.line1}, ${shippingAddress.city}, ${
+              shippingAddress.country || ""
+            }`
+          : "No disponible";
+      // Guardar en la base de datos
+      let orderId;
+      try {
         const insertResult = await pool.query(
           `INSERT INTO compras (user_id, producto, precio, fecha, status, phone, shipping_address, stripe_session_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
           [
             parseInt(session.metadata.user_id),
             product.name,
-            productData.amount_total / 100,
+            productData.amount_total / 100, // Convertir centavos a moneda
             new Date(),
             "paid",
             phone,
@@ -141,32 +178,36 @@ app.post(
             session.id,
           ]
         );
+        console.log("🔍 insertResult:", JSON.stringify(insertResult, null, 2));
+        if (!insertResult.rows[0]?.id) {
+          throw new Error("No se obtuvo el ID de la compra");
+        }
+        orderId = insertResult.rows[0].id;
+        console.log("✅ Compra guardada en la base de datos, ID:", orderId);
+      } catch (dbError) {
+        console.error("❌ Error guardando compra:", dbError.message);
+        return res.status(500).json({ error: "Error guardando la compra" });
+      }
+      // Enviar SMS al admin
+      await sendAdminNotification(
+        orderId,
+        product.name,
+        session.customer_details?.name || "Desconocido",
+        phone,
+        addressString
+      );
 
-        const orderId = insertResult.rows[0].id;
-        console.log("✅ Compra guardada en DB:", orderId);
-
-        // 4. Notificación al admin
-        await sendAdminNotification(
-          orderId,
+      // Enviar SMS al usuario (solo si hay teléfono)
+      if (phone) {
+        await sendUserNotification(
+          session.customer_details?.name || "Cliente",
           product.name,
-          session.customer_details?.name || "Desconocido",
+          productData.amount_total / 100,
           phone,
           addressString
         );
-
-        // 5. Notificación al usuario
-        if (phone) {
-          await sendUserNotification(
-            session.customer_details?.name || "Cliente",
-            product.name,
-            productData.amount_total / 100,
-            phone,
-            addressString
-          );
-        }
-      } catch (err) {
-        console.error("❌ Error en webhook:", err.message);
-        return res.status(500).json({ error: "Error procesando la compra" });
+      } else {
+        console.log("⚠️ No se envió SMS al usuario: teléfono no disponible");
       }
     }
 
