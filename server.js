@@ -42,23 +42,13 @@ if (NODE_ENV === "production") {
   app.set("trust proxy", 1);
 }
 
-// --- Middlewares globales ---
-app.use(
-  cors({
-    origin: FRONTEND_URL, // React Dev Server
-    credentials: true,
-  })
-);
-
-// Permitir solo tu dominio de frontend
-const allowedOrigins = [
-  "https://cafearomadelaserrania.onrender.com",
-  "http://localhost:5173",
-];
-
 app.use(
   cors({
     origin: function (origin, callback) {
+      const allowedOrigins = [
+        "https://cafearomadelaserrania.onrender.com",
+        "http://localhost:5173",
+      ];
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -66,6 +56,8 @@ app.use(
       }
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
