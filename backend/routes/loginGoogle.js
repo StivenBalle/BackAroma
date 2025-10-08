@@ -8,10 +8,10 @@ const router = express.Router();
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 router.post("/auth/google", async (req, res) => {
-  const { credential } = req.body;
+  const { credential, nonce } = req.body;
 
-  if (!credential) {
-    return res.status(400).json({ error: "Credencial de Google requerida" });
+  if (!credential || !nonce) {
+    return res.status(400).json({ error: "Credenciales inválidas." });
   }
 
   try {
