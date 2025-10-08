@@ -100,4 +100,30 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// Nueva ruta para actualizar teléfono
+router.put("/update-phone", verifyToken, async (req, res) => {
+  const { phone_number } = req.body;
+  const userId = req.user.id;
+
+  if (!phone_number || !/^\d{7,15}$/.test(phone_number)) {
+    return res
+      .status(400)
+      .json({ error: "El teléfono debe tener entre 7 y 15 dígitos" });
+  }
+
+  try {
+    const result = await pool.query(
+      "UPDATE users SET phone_number = $1 WHERE id = $2 RETURNING id, name, email, phone_number, role",
+      [phone_number, userId]
+    );
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+    res.json({ message: "✅ Teléfono actualizado", user: result.rows[0] });
+  } catch (err) {
+    console.error("❌ Error updating phone:", err.message);
+    res.status(500).json({ error: "Error al actualizar el teléfono" });
+  }
+});
+
 export default router;

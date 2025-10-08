@@ -4,12 +4,13 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
+import passport from "passport";
 import errorHandler from "./backend/errorHandler.js";
 import authRoutes from "./backend/routes/auth.js";
 import adminRoutes from "./backend/routes/admin.js";
 import historyRoutes from "./backend/routes/history.js";
 import stripeRoutes from "./backend/routes/stripe.js";
-import "./backend/routes/loginGoogle.js";
+import googleAuthRoutes from "./backend/routes/loginGoogle.js";
 import {
   FRONTEND_URL,
   NODE_ENV,
@@ -35,6 +36,8 @@ app.use(
       const allowedOrigins = [
         "https://cafearomadelaserrania.onrender.com",
         "http://localhost:5173",
+        "http://localhost:3000",
+        "https://webaromaserrania.onrender.com",
       ];
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
@@ -59,10 +62,12 @@ app.use((req, res, next) => {
 app.use("/api", stripeRoutes);
 
 app.use(express.json());
+app.use(passport.initialize());
 // --- Rutas API ---
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api", historyRoutes);
+app.use("/api", googleAuthRoutes);
 
 // Stripe - Configuración pública
 app.get("/api/config", (req, res) => {
