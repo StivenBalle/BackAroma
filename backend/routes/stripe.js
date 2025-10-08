@@ -103,8 +103,8 @@ router.post(
       let orderId;
       try {
         const insertResult = await pool.query(
-          `INSERT INTO compras (user_id, producto, precio, fecha, status, phone, shipping_address, stripe_session_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+          `INSERT INTO compras (user_id, producto, precio, fecha, status, phone, shipping_address, stripe_session_id, image)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
           [
             parseInt(session.metadata.user_id),
             product.name,
@@ -114,6 +114,7 @@ router.post(
             phone,
             JSON.stringify(shippingAddress),
             session.id,
+            product.images?.[0] || "No image",
           ]
         );
         console.log("🔍 insertResult:", JSON.stringify(insertResult, null, 2));
@@ -153,6 +154,31 @@ router.post(
 );
 
 router.use(express.json());
+
+// Obtener detalles de una compra desde el session_id
+router.get("/stripe/purchase/:session_id", async (req, res) => {
+  const { session_id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT c.id, c.producto, c.precio, c.fecha, c.status, c.phone, c.shipping_address, c.image,
+              u.name AS usuario, u.email AS email
+       FROM compras c
+       JOIN users u ON c.user_id = u.id
+       WHERE c.stripe_session_id = $1`,
+      [session_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Compra no encontrada" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Error obteniendo detalles de la compra:", error.message);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
 
 // --- Función para enviar SMS al admin ---
 async function sendAdminNotification(
