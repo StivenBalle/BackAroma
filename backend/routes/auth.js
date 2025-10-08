@@ -37,12 +37,12 @@ router.post("/logout", (req, res) => {
   res.json({ message: "✅ Logout exitoso" });
 });
 
-// En src/backend/routes/auth.js, endpoint /api/auth/profile
+// Trae el perfil del usuario
 router.get("/profile", verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id; // Del token JWT
+    const userId = req.user.id;
     const result = await pool.query(
-      "SELECT id, name, email, phone_number, role FROM users WHERE id = $1",
+      "SELECT id, name, email, phone_number, role, image FROM users WHERE id = $1",
       [userId]
     );
     if (!result.rows[0]) {
@@ -56,43 +56,37 @@ router.get("/profile", verifyToken, async (req, res) => {
   }
 });
 
-// Register route (nueva)
+// Registro de usuario
 router.post("/register", async (req, res) => {
   const { name, phone_number, email, password } = req.body;
-
-  // Validar campos
   if (!name || !phone_number || !email || !password) {
     return res
       .status(400)
       .json({ error: "Todos los campos son obligatorios." });
   }
-
   if (!email.includes("@") || password.length < 4) {
     return res.status(400).json({ error: "Email o contraseña inválidos." });
   }
 
   try {
-    // Verificar si el email ya está registrado
-    const emailCheck = await pool.query(
+    // Verificar si ya existe un usuario con ese correo
+    const existingUser = await pool.query(
       "SELECT * FROM users WHERE email = $1",
       [email]
     );
-    if (emailCheck.rows.length > 0) {
+    if (existingUser.rows.length > 0)
       return res.status(400).json({ error: "El email ya está registrado." });
-    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Insertar el nuevo usuario
+    // Insertar nuevo usuario local
     const result = await pool.query(
-      "INSERT INTO users (name, phone_number, email, password) VALUES ($1, $2, $3, $4) RETURNING id, name, email",
-      [name, phone_number, email, hashedPassword]
+      `INSERT INTO users (name, phone_number, email, password, role, auth_provider)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, email, role`,
+      [name, phone_number, email, hashedPassword, "user", "local"]
     );
-
     const user = result.rows[0];
-
-    // Generar token JWT
     generateToken(user, res);
-
     res.status(201).json({ message: "✅ Registro exitoso", user });
   } catch (error) {
     console.error("❌ Error en registro:", error.message);

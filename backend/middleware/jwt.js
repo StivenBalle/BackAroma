@@ -11,7 +11,7 @@ export const verifyToken = async (req, res, next) => {
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    console.log("Decoded token:", decoded); // Depuración
+    console.log("Decoded token:", decoded);
     const result = await pool.query(
       "SELECT id, email, role FROM users WHERE id = $1",
       [decoded.id]
@@ -19,7 +19,7 @@ export const verifyToken = async (req, res, next) => {
     if (!result.rows[0]) {
       return res.status(401).json({ error: "Usuario no encontrado" });
     }
-    req.user = result.rows[0]; // Incluye id, email, role
+    req.user = result.rows[0];
     next();
   } catch (err) {
     console.error("❌ Error verifying token:", err.message);
