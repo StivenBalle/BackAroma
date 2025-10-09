@@ -156,7 +156,7 @@ router.post(
 router.use(express.json());
 
 // Obtener detalles de una compra desde el session_id
-router.get("/stripe/purchase/:session_id", async (req, res) => {
+router.get("/stripe/purchase/:session_id", verifyToken, async (req, res) => {
   const { session_id } = req.params;
 
   try {

@@ -23,6 +23,9 @@ export const verifyToken = async (req, res, next) => {
     next();
   } catch (err) {
     console.error("❌ Error verifying token:", err.message);
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({ error: "Sesión expirada" });
+    }
     return res.status(403).json({ error: "Token inválido" });
   }
 };
