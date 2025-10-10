@@ -149,4 +149,78 @@ router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// Compras por mes
+router.get(
+  "/stats/sales-by-month",
+  verifyToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+      SELECT 
+        TO_CHAR(fecha, 'YYYY-MM') AS mes,
+        COUNT(*) AS total_compras,
+        SUM(precio) AS total_ventas
+      FROM compras
+      GROUP BY mes
+      ORDER BY mes ASC;
+    `);
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error al obtener ventas por mes:", error);
+      res.status(500).json({ error: "Error al obtener ventas por mes" });
+    }
+  }
+);
+
+// Productos más vendidos
+router.get(
+  "/stats/top-products",
+  verifyToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+      SELECT 
+        producto, 
+        COUNT(*) AS cantidad_vendida,
+        SUM(precio) AS total_ventas
+      FROM compras
+      GROUP BY producto
+      ORDER BY cantidad_vendida DESC
+      LIMIT 5;
+    `);
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error al obtener productos más vendidos:", error);
+      res
+        .status(500)
+        .json({ error: "Error al obtener productos más vendidos" });
+    }
+  }
+);
+
+// Usuarios registrados por mes
+router.get(
+  "/stats/users-by-month",
+  verifyToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+      SELECT 
+        TO_CHAR(created_at, 'YYYY-MM') AS mes,
+        COUNT(*) AS nuevos_usuarios
+      FROM users
+      GROUP BY mes
+      ORDER BY mes ASC;
+    `);
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error al obtener usuarios por mes:", error);
+      res.status(500).json({ error: "Error al obtener usuarios por mes" });
+    }
+  }
+);
+
 export default router;
