@@ -11,6 +11,7 @@ import adminRoutes from "./backend/routes/admin.js";
 import historyRoutes from "./backend/routes/history.js";
 import stripeRoutes from "./backend/routes/stripe.js";
 import googleAuthRoutes from "./backend/routes/loginGoogle.js";
+import profileRoutes from "./backend/routes/profile.js";
 import {
   FRONTEND_URL,
   NODE_ENV,
@@ -68,10 +69,21 @@ app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api", historyRoutes);
 app.use("/api", googleAuthRoutes);
+app.use("/api/user", profileRoutes);
 
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Stripe - Configuración pública
 app.get("/api/config", (req, res) => {
   res.json({ publishableKey: STRIPE_PUBLIC_KEY });
+});
+
+// Manejo de errores
+app.use((err, req, res, next) => {
+  console.error("❌ Server error:", err.message);
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: `Error de Multer: ${err.message}` });
+  }
+  res.status(500).json({ error: "Error interno del servidor" });
 });
 
 app.use((req, res, next) => {
