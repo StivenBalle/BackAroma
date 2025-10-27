@@ -4,6 +4,11 @@ import pool from "../db.js";
 
 const router = express.Router();
 
+const BASE_URL =
+  process.env.NODE_ENV === "production"
+    ? "https://backendaromaserrania.onrender.com"
+    : "http://localhost:3000";
+
 // Middleware para verificar admin
 const requireAdmin = (req, res, next) => {
   console.log("Usuario en middleware:", req.user);
@@ -39,9 +44,9 @@ router.get("/users", verifyToken, requireAdmin, async (req, res) => {
   try {
     const { search } = req.query;
     let query = `
-      SELECT id, name, email, role 
+      SELECT id, name, email, role, image
       FROM users 
-      WHERE role != 'inactive'  -- Opcional: excluye usuarios inactivos
+      WHERE role != 'inactive'
     `;
     const params = [];
 
@@ -52,8 +57,14 @@ router.get("/users", verifyToken, requireAdmin, async (req, res) => {
 
     query += ` ORDER BY name ASC`;
     const result = await pool.query(query, params);
+
+    const users = result.rows.map((user) => ({
+      ...user,
+      image: user.image ? `${BASE_URL}${user.image}` : null,
+    }));
+
     console.log("Usuarios encontrados:", result.rows.length);
-    res.json({ users: result.rows });
+    res.json({ users });
   } catch (error) {
     console.error("❌ Error fetching users:", error.message);
     res.status(500).json({ error: "Error al buscar usuarios" });
