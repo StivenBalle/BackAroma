@@ -60,7 +60,11 @@ router.get("/users", verifyToken, requireAdmin, async (req, res) => {
 
     const users = result.rows.map((user) => ({
       ...user,
-      image: user.image ? `${BASE_URL}${user.image}` : null,
+      image: user.image
+        ? user.image.startsWith("http://") || user.image.startsWith("https://")
+          ? user.image
+          : `${BASE_URL}${user.image}`
+        : null,
     }));
 
     console.log("Usuarios encontrados:", result.rows.length);
