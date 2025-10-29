@@ -93,7 +93,7 @@ router.get("/profile", verifyToken, async (req, res, next) => {
   try {
     const userId = req.user.id;
     const result = await pool.query(
-      `SELECT name, email, phone_number, role, image, created_at FROM users WHERE id = $1`,
+      `SELECT name, email, phone_number, role, image,  auth_provider, address, created_at FROM users WHERE id = $1`,
       [userId]
     );
 

@@ -116,6 +116,97 @@ router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/users/:userId - Obtener perfil completo de un usuario
+router.get(
+  "/users/:userId",
+  verifyToken,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const { userId } = req.params;
+
+      const result = await pool.query(
+        `SELECT id, name, email, phone_number, role, image, auth_provider, address, created_at 
+       FROM users WHERE id = $1`,
+        [userId]
+      );
+
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      const user = result.rows[0];
+
+      if (user.image) {
+        user.image = user.image.startsWith("http")
+          ? user.image
+          : `${process.env.BASE_URL || "http://localhost:3000"}${user.image}`;
+      }
+
+      if (user.address) {
+        const addr = user.address;
+        user.address_display = `${addr.line1 || ""}${
+          addr.city ? ", " + addr.city : ""
+        }${addr.state ? ", " + addr.state : ""}${
+          addr.country ? ", " + addr.country : ""
+        }${addr.postal_code ? " - " + addr.postal_code : ""}`;
+        user.address_full = addr;
+      } else {
+        user.address_display = null;
+        user.address_full = null;
+      }
+
+      res.json(user);
+    } catch (err) {
+      console.error("❌ Error fetching user profile:", err.message);
+      next(err);
+    }
+  }
+);
+
+// GET /api/admin/users/:userId/historial - Obtener historial de compras de un usuario
+router.get(
+  "/users/:userId/historial",
+  verifyToken,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const { userId } = req.params;
+
+      const result = await pool.query(
+        `SELECT 
+        c.id,
+        c.producto,
+        c.precio::float as precio,
+        c.fecha,
+        c.status,
+        c.shipping_address,
+        u.address FROM compras c
+       LEFT JOIN users u ON c.user_id = u.id
+       WHERE c.user_id = $1
+       ORDER BY c.fecha DESC`,
+        [userId]
+      );
+
+      const compras = result.rows.map((row) => {
+        return {
+          id: row.id,
+          producto: row.producto,
+          precio: row.precio,
+          fecha: row.fecha,
+          status: row.status,
+          shipping_address: row.user_address || null,
+        };
+      });
+
+      res.json({ compras });
+    } catch (err) {
+      console.error("❌ Error fetching user purchase history:", err.message);
+      next(err);
+    }
+  }
+);
+
 // 🔹 NUEVO ENDPOINT: Cambiar rol de usuario
 router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
   try {
