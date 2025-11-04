@@ -329,4 +329,42 @@ router.get(
   }
 );
 
+router.patch(
+  "/change-order/:id/status",
+  verifyToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      // Validar estado permitido
+      const validStatuses = [
+        "pendiente",
+        "procesando",
+        "enviado",
+        "completado",
+        "cancelado",
+      ];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: "Estado no válido" });
+      }
+
+      const result = await pool.query(
+        "UPDATE compras SET status = $1 WHERE id = $2",
+        [status, id]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "Pedido no encontrado" });
+      }
+
+      res.json({ success: true, status });
+    } catch (error) {
+      console.error("Error actualizando estado:", error);
+      res.status(500).json({ error: "Error interno del servidor" });
+    }
+  }
+);
+
 export default router;
