@@ -1,6 +1,7 @@
 import express from "express";
-import pool from "../db.js"; // tu conexión a PostgreSQL
+import pool from "../database/db.js";
 import { verifyToken } from "../middleware/jwt.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -10,10 +11,10 @@ router.get("/historial", verifyToken, async (req, res) => {
       "SELECT id, producto, precio::float as precio, fecha, status FROM compras WHERE user_id = $1 ORDER BY fecha DESC",
       [req.user.id]
     );
-    console.log("Historial enviado:", JSON.stringify(result.rows, null, 2)); // Depuración
+    logger.log("Historial enviado:", JSON.stringify(result.rows, null, 2)); // Depuración
     res.json({ compras: result.rows });
   } catch (error) {
-    console.error("❌ Error obteniendo historial:", error.message);
+    logger.error("❌ Error obteniendo historial:", error.message);
     res.status(500).json({ error: "No se pudo obtener el historial" });
   }
 });

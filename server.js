@@ -5,19 +5,20 @@ import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
 import passport from "passport";
-import errorHandler from "./backend/errorHandler.js";
+import errorHandler from "./backend/utils/errorHandler.js";
 import authRoutes from "./backend/routes/auth.js";
 import adminRoutes from "./backend/routes/admin.js";
 import historyRoutes from "./backend/routes/history.js";
 import stripeRoutes from "./backend/routes/stripe.js";
 import googleAuthRoutes from "./backend/routes/loginGoogle.js";
 import profileRoutes from "./backend/routes/profile.js";
+import logger from "./backend/utils/logger.js";
 import {
   FRONTEND_URL,
   NODE_ENV,
   STRIPE_PUBLIC_KEY,
   PORTG,
-} from "./backend/config.js";
+} from "./backend/utils/config.js";
 
 // --- Configuración inicial ---
 const __filename = fileURLToPath(import.meta.url);
@@ -56,7 +57,7 @@ app.use(cookieParser());
 
 // --- Logger ---
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  logger.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
 
@@ -79,7 +80,7 @@ app.get("/api/config", (req, res) => {
 
 // Manejo de errores
 app.use((err, req, res, next) => {
-  console.error("❌ Server error:", err.message);
+  logger.error("❌ Server error:", err.message);
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Error de Multer: ${err.message}` });
   }
@@ -100,6 +101,6 @@ app.use(errorHandler);
 // --- Iniciar servidor ---
 const PORT = PORTG || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Backend corriendo en puerto ${PORT}`);
-  console.log(`🌐 FRONTEND_URL esperada: ${FRONTEND_URL}`);
+  logger.log(`🚀 Backend corriendo en puerto ${PORT}`);
+  logger.log(`🌐 FRONTEND_URL esperada: ${FRONTEND_URL}`);
 });

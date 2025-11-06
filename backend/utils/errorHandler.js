@@ -1,9 +1,10 @@
-// Middleware de manejo de errores
+import logger from "./logger.js";
+
 function errorHandler(err, req, res, next) {
-  console.error("❌ Error detectado en backend:");
-  console.error("📍 Ruta:", req.method, req.url);
-  console.error("📄 Mensaje:", err.message);
-  console.error("🧵 Stack:", err.stack);
+  logger.error("❌ Error detectado en backend:");
+  logger.error("📍 Ruta:", req.method, req.url);
+  logger.error("📄 Mensaje:", err.message);
+  logger.error("🧵 Stack:", err.stack);
 
   res.status(err.status || 500).json({
     error: err.message || "Error interno del servidor",

@@ -1,9 +1,10 @@
 import express from "express";
 import bcrypt from "bcrypt";
-import loginUser from "../loginUser.js";
+import loginUser from "../routes/loginUser.js";
 import { generateToken, verifyToken } from "../middleware/jwt.js";
-import { NODE_ENV } from "../config.js";
-import pool from "../db.js";
+import logger from "../utils/logger.js";
+import { NODE_ENV } from "../utils/config.js";
+import pool from "../database/db.js";
 
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.post("/login", async (req, res) => {
     generateToken(user, res);
     res.json({ message: "✅ Login exitoso", user });
   } catch (error) {
-    console.error("❌ Error logging in:", error.message);
+    logger.error("❌ Error logging in:", error.message);
     res.status(401).json({ error: error.message });
   }
 });
@@ -31,7 +32,7 @@ router.post("/login", async (req, res) => {
 router.post("/logout", (req, res) => {
   res.clearCookie("access_token", {
     httpOnly: true,
-    secure: NODE_ENV === "production",
+    secure: NODE_ENV === "development",
     sameSite: "none",
   });
   res.json({ message: "✅ Logout exitoso" });
@@ -48,10 +49,10 @@ router.get("/profile", verifyToken, async (req, res) => {
     if (!result.rows[0]) {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
-    console.log("Perfil enviado:", result.rows[0]);
+    logger.log("Perfil enviado:", result.rows[0]);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error("❌ Error fetching profile:", err.message);
+    logger.error("❌ Error fetching profile:", err.message);
     res.status(500).json({ error: "Error al obtener perfil" });
   }
 });
@@ -89,7 +90,7 @@ router.post("/register", async (req, res) => {
     generateToken(user, res);
     res.status(201).json({ message: "✅ Registro exitoso", user });
   } catch (error) {
-    console.error("❌ Error en registro:", error.message);
+    logger.error("❌ Error en registro:", error.message);
     res.status(500).json({ error: "Error al registrar el usuario" });
   }
 });
@@ -115,7 +116,7 @@ router.put("/update-phone", verifyToken, async (req, res) => {
     }
     res.json({ message: "✅ Teléfono actualizado", user: result.rows[0] });
   } catch (err) {
-    console.error("❌ Error updating phone:", err.message);
+    logger.error("❌ Error updating phone:", err.message);
     res.status(500).json({ error: "Error al actualizar el teléfono" });
   }
 });

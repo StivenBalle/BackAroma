@@ -1,8 +1,9 @@
 import express from "express";
 import Stripe from "stripe";
-import { verifyToken } from "../middleware/jwt.js";
 import Twilio from "twilio";
-import pool from "../db.js";
+import pool from "../database/db.js";
+import logger from "../utils/logger.js";
+import { verifyToken } from "../middleware/jwt.js";
 
 import {
   STRIPE_SECRET_KEY,
@@ -12,7 +13,7 @@ import {
   AUTH_TOKEN,
   TWILIO_PHONE_NUMBER,
   ADMIN_PHONE_NUMBER,
-} from "../config.js";
+} from "../utils/config.js";
 
 const router = express.Router();
 const stripe = new Stripe(STRIPE_SECRET_KEY);
@@ -33,22 +34,22 @@ router.post(
         STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      console.error("❌ Webhook error:", err.message);
+      logger.error("❌ Webhook error:", err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
-      console.log(
+      logger.log(
         "🔍 session.shipping_details:",
         JSON.stringify(session.shipping_details, null, 2)
       );
-      console.log(
+      logger.log(
         "🔍 session.customer_details:",
         JSON.stringify(session.customer_details, null, 2)
       );
-      console.log(
+      logger.log(
         "🔍 session.shipping:",
         JSON.stringify(session.shipping, null, 2)
       );
@@ -66,14 +67,14 @@ router.post(
         price = productData.price;
         product = price.product;
       } catch (err) {
-        console.error("❌ Error obteniendo lineItems:", err.message);
+        logger.error("❌ Error obteniendo lineItems:", err.message);
         return res
           .status(500)
           .json({ error: "Error obteniendo ítems de la compra" });
       }
 
       const shippingAddress = session.customer_details?.address || {};
-      console.log(
+      logger.log(
         "🔍 shippingAddress:",
         JSON.stringify(shippingAddress, null, 2)
       );
@@ -85,9 +86,9 @@ router.post(
           [parseInt(session.metadata.user_id)]
         );
         phone = userResult.rows[0]?.phone_number || null;
-        console.log("🔍 user.phone_number from DB:", phone);
+        logger.log("user.phone_number from DB:", phone);
       } catch (dbError) {
-        console.error(
+        logger.error(
           "❌ Error obteniendo teléfono del usuario:",
           dbError.message
         );
@@ -117,14 +118,14 @@ router.post(
             product.images?.[0] || "No image",
           ]
         );
-        console.log("🔍 insertResult:", JSON.stringify(insertResult, null, 2));
+        logger.log("🔍 insertResult:", JSON.stringify(insertResult, null, 2));
         if (!insertResult.rows[0]?.id) {
           throw new Error("No se obtuvo el ID de la compra");
         }
         orderId = insertResult.rows[0].id;
-        console.log("✅ Compra guardada en la base de datos, ID:", orderId);
+        logger.log("✅ Compra guardada en la base de datos, ID:", orderId);
       } catch (dbError) {
-        console.error("❌ Error guardando compra:", dbError.message);
+        logger.error("❌ Error guardando compra:", dbError.message);
         return res.status(500).json({ error: "Error guardando la compra" });
       }
 
@@ -145,7 +146,7 @@ router.post(
           addressString
         );
       } else {
-        console.log("⚠️ No se envió SMS al usuario: teléfono no disponible");
+        logger.log("No se envió SMS al usuario: teléfono no disponible");
       }
     }
 
@@ -175,7 +176,7 @@ router.get("/stripe/purchase/:session_id", verifyToken, async (req, res) => {
 
     res.json(result.rows[0]);
   } catch (error) {
-    console.error("❌ Error obteniendo detalles de la compra:", error.message);
+    logger.error("❌ Error obteniendo detalles de la compra:", error.message);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
@@ -197,9 +198,9 @@ async function sendAdminNotification(
       from: TWILIO_PHONE_NUMBER,
       to: ADMIN_PHONE_NUMBER,
     });
-    console.log("✅ SMS enviado al admin:", messageObj.sid);
+    logger.log("✅ SMS enviado al admin:", messageObj.sid);
   } catch (err) {
-    console.error("❌ Error enviando SMS al admin:", err.message);
+    logger.error("❌ Error enviando SMS al admin:", err.message);
   }
 }
 
@@ -224,9 +225,9 @@ async function sendUserNotification(
       from: TWILIO_PHONE_NUMBER,
       to: formattedPhone,
     });
-    console.log("✅ SMS enviado al usuario", messageObj.sid);
+    logger.log("✅ SMS enviado al usuario", messageObj.sid);
   } catch (err) {
-    console.error("❌ Error enviando SMS al usuario:", err.message);
+    logger.error("❌ Error enviando SMS al usuario:", err.message);
   }
 }
 
@@ -254,7 +255,7 @@ router.post("/create-checkout-session", verifyToken, async (req, res) => {
     });
     res.json({ url: session.url });
   } catch (error) {
-    console.error("❌ Error creating checkout session:", error.message);
+    logger.error("❌ Error creating checkout session:", error.message);
     res.status(500).json({ error: "No se pudo crear la sesión de pago" });
   }
 });
@@ -271,7 +272,7 @@ router.get("/products", async (req, res, next) => {
 
     res.json({ products: productsRes.data, prices: validPrices });
   } catch (error) {
-    console.error("❌ Error al obtener productos:", error.message);
+    logger.error("❌ Error al obtener productos:", error.message);
     next(error);
   }
 });

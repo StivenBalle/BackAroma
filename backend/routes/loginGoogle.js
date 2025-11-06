@@ -1,8 +1,9 @@
 import express from "express";
 import { OAuth2Client } from "google-auth-library";
 import { generateToken } from "../middleware/jwt.js";
-import pool from "../db.js";
-import { GOOGLE_CLIENT_ID } from "../config.js";
+import logger from "../utils/logger.js";
+import pool from "../database/db.js";
+import { GOOGLE_CLIENT_ID } from "../utils/config.js";
 
 const router = express.Router();
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -43,7 +44,7 @@ router.post("/auth/google", async (req, res) => {
         [google_id, email, name, picture, "user", null, null, "google"]
       );
       user = userResult.rows[0];
-      console.log("🆕 Usuario Google registrado:", user.email);
+      logger.log("🆕 Usuario Google registrado:", user.email);
     } else {
       // ✅ Actualizar datos si ya existía
       await pool.query(
@@ -59,14 +60,14 @@ router.post("/auth/google", async (req, res) => {
         [email]
       );
       user = userResult.rows[0];
-      console.log("🔁 Usuario Google actualizado:", user.email);
+      logger.log("🔁 Usuario Google actualizado:", user.email);
     }
 
     // ✅ Generar token y enviar respuesta
     generateToken(user, res);
     res.json({ message: "✅ Google login exitoso", user });
   } catch (err) {
-    console.error("❌ Error en Google login:", err.message);
+    logger.error("❌ Error en Google login:", err.message);
     res.status(401).json({ error: "Error al autenticar con Google" });
   }
 });

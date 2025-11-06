@@ -1,17 +1,18 @@
 import jwt from "jsonwebtoken";
-import { JWT_SECRET, NODE_ENV } from "../config.js";
-import pool from "../db.js";
+import { JWT_SECRET, NODE_ENV } from "../utils/config.js";
+import logger from "../utils/logger.js";
+import pool from "../database/db.js";
 
 export const verifyToken = async (req, res, next) => {
   const token =
     req.cookies.access_token || req.headers.authorization?.split(" ")[1];
-  console.log("Token recibido:", token);
+  logger.log("Token recibido:", token);
   if (!token) {
     return res.status(401).json({ error: "No autorizado" });
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    console.log("Decoded token:", decoded);
+    logger.log("Decoded token:", decoded);
     const result = await pool.query(
       "SELECT id, email, role FROM users WHERE id = $1",
       [decoded.id]
@@ -22,7 +23,7 @@ export const verifyToken = async (req, res, next) => {
     req.user = result.rows[0];
     next();
   } catch (err) {
-    console.error("❌ Error verifying token:", err.message);
+    logger.error("❌ Error verifying token:", err.message);
     if (err.name === "TokenExpiredError") {
       return res.status(401).json({ error: "Sesión expirada" });
     }

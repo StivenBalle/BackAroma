@@ -1,4 +1,6 @@
 import pkg from "pg";
+import logger from "../utils/logger.js";
+
 const { Pool } = pkg;
 import {
   DB_HOST,
@@ -7,7 +9,7 @@ import {
   DATABASE_URL,
   DB_PORT,
   DB_NAME,
-} from "./config.js";
+} from "../utils/config.js";
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -22,22 +24,22 @@ const pool = new Pool({
 });
 
 // Logs de verificación
-console.log("🛠️ Verificando configuración de base de datos:");
-console.log("URL:", DATABASE_URL);
-console.log("Host:", DB_HOST);
-console.log("Puerto:", DB_PORT);
-console.log("Usuario:", DB_USER);
-console.log("Contraseña:", DB_PASSWORD ? "✔️ cargada" : "❌ vacía");
-console.log("Base de datos:", DB_NAME);
+logger.log("🛠️ Verificando configuración de base de datos:");
+logger.log("URL:", DATABASE_URL);
+logger.log("Host:", DB_HOST);
+logger.log("Puerto:", DB_PORT);
+logger.log("Usuario:", DB_USER);
+logger.log("Contraseña:", DB_PASSWORD ? "✔️ cargada" : "❌ vacía");
+logger.log("Base de datos:", DB_NAME);
 
 // Probar la conexión
 (async () => {
   try {
     const client = await pool.connect();
-    console.log("✅ Conexión exitosa a PostgreSQL");
+    logger.log("✅ Conexión exitosa a PostgreSQL");
     client.release();
   } catch (err) {
-    console.error("❌ Error al conectar a PostgreSQL:", err.message);
+    logger.error("❌ Error al conectar a PostgreSQL:", err.message);
   }
 })();
 

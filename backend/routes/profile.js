@@ -1,10 +1,12 @@
 import express from "express";
-import { verifyToken } from "../middleware/jwt.js";
-import pool from "../db.js";
+import bcrypt from "bcrypt";
 import multer from "multer";
 import path from "path";
-import { fileURLToPath } from "url";
 import fs from "fs";
+import pool from "../database/db.js";
+import { verifyToken } from "../middleware/jwt.js";
+import logger from "../utils/logger.js";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,7 +33,7 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  console.log("📥 Procesando archivo en multer:", file);
+  logger.log("📥 Procesando archivo en multer:", file);
   const allowedTypes = ["image/jpeg", "image/png"];
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
@@ -54,7 +56,7 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.id;
-      console.log(
+      logger.log(
         `📥 POST /api/user/profile-image - userId: ${userId}, file:`,
         req.file
       );
@@ -76,13 +78,13 @@ router.post(
         [imagePath, userId]
       );
 
-      console.log("📤 Imagen de perfil cargada:", fullImageUrl);
+      logger.log("📤 Imagen de perfil cargada:", fullImageUrl);
       res.json({
         message: "Imagen de perfil cargada correctamente",
-        image: fullImageUrl, // 👈 Devolvemos la URL completa
+        image: fullImageUrl,
       });
     } catch (err) {
-      console.error("❌ Error uploading profile image:", err.message);
+      logger.error("❌ Error uploading profile image:", err.message);
       next(err);
     }
   }
@@ -108,7 +110,7 @@ router.get("/profile", verifyToken, async (req, res, next) => {
 
     res.json(user);
   } catch (err) {
-    console.error("❌ Error fetching profile:", err.message);
+    logger.error("❌ Error fetching profile:", err.message);
     next(err);
   }
 });
@@ -117,7 +119,7 @@ router.get("/profile", verifyToken, async (req, res, next) => {
 router.delete("/delete-image", verifyToken, async (req, res, next) => {
   try {
     const userId = req.user.id;
-    console.log(`📥 DELETE /api/user/profile-image - userId: ${userId}`);
+    logger.log(`📥 DELETE /api/user/profile-image - userId: ${userId}`);
 
     // Obtener la ruta de la imagen actual
     const result = await pool.query(`SELECT image FROM users WHERE id = $1`, [
@@ -133,7 +135,7 @@ router.delete("/delete-image", verifyToken, async (req, res, next) => {
       const filePath = path.join(__dirname, "../../", currentImage);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
-        console.log(`📁 Archivo eliminado: ${filePath}`);
+        logger.log(`📁 Archivo eliminado: ${filePath}`);
       }
     }
 
@@ -141,7 +143,7 @@ router.delete("/delete-image", verifyToken, async (req, res, next) => {
 
     res.json({ message: "Imagen de perfil eliminada correctamente" });
   } catch (err) {
-    console.error("❌ Error deleting profile image:", err.message);
+    logger.error("❌ Error deleting profile image:", err.message);
     next(err);
   }
 });
@@ -166,7 +168,7 @@ router.put("/update", verifyToken, async (req, res, next) => {
       ...result.rows[0],
     });
   } catch (err) {
-    console.error("❌ Error updating profile:", err.message);
+    logger.error("❌ Error updating profile:", err.message);
     next(err);
   }
 });
@@ -208,7 +210,7 @@ router.put("/update/shipping-address", verifyToken, async (req, res, next) => {
       address: result.rows[0].address,
     });
   } catch (err) {
-    console.error("❌ Error updating shipping address:", err.message);
+    logger.error("❌ Error updating shipping address:", err.message);
     next(err);
   }
 });
@@ -249,7 +251,7 @@ router.post("/add/shipping-address", verifyToken, async (req, res, next) => {
       address: result.rows[0].address,
     });
   } catch (err) {
-    console.error("❌ Error creating shipping address:", err.message);
+    logger.error("❌ Error creating shipping address:", err.message);
     next(err);
   }
 });
@@ -263,13 +265,204 @@ router.get("/shipping-address", verifyToken, async (req, res, next) => {
     ]);
 
     if (!result.rows[0] || !result.rows[0].address) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return res.json({ address: null });
     }
 
     res.json({ address: result.rows[0].address });
   } catch (err) {
-    console.error("❌ Error fetching shipping address:", err.message);
+    logger.error("❌ Error fetching shipping address:", err.message);
     next(err);
+  }
+});
+
+// POST - Crear reseña
+router.post("/reviews", verifyToken, async (req, res) => {
+  try {
+    const { orderId, rating, comment } = req.body;
+    const userId = req.user.id;
+
+    if (!orderId || !rating || !comment) {
+      return res.status(400).json({ error: "Faltan campos obligatorios" });
+    }
+
+    // Verificar si ya existe una reseña para este pedido
+    const checkReview = await pool.query(
+      "SELECT id FROM reviews WHERE order_id = $1",
+      [orderId]
+    );
+    if (checkReview.rows.length > 0) {
+      return res
+        .status(400)
+        .json({ error: "Ya existe una reseña para este pedido" });
+    }
+
+    // Verificar que la orden pertenezca al usuario
+    const checkOrder = await pool.query(
+      "SELECT * FROM compras WHERE id = $1 AND user_id = $2",
+      [orderId, userId]
+    );
+    if (checkOrder.rows.length === 0) {
+      return res.status(403).json({ error: "No puedes reseñar este pedido" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO reviews (user_id, order_id, rating, comment)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [userId, orderId, rating, comment]
+    );
+
+    res.json({ success: true, review: result.rows[0] });
+  } catch (error) {
+    logger.error("Error creando reseña:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
+// 🔹 Obtener todas las reseñas (para el Home)
+router.get("/reviews", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        r.id,
+        r.order_id,
+        r.user_id,
+        r.rating,
+        r.comment,
+        r.created_at,
+        u.name,
+        u.email,
+        u.phone_number
+      FROM reviews r
+      INNER JOIN users u ON r.user_id = u.id
+      ORDER BY r.created_at DESC LIMIT 20
+    `);
+    res.json({ reviews: result.rows });
+  } catch (error) {
+    logger.error("Error obteniendo reseñas:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
+// 🔹 Verificar si una orden ya tiene reseña
+router.get("/reviews/order/:orderId", verifyToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      "SELECT rating, comment FROM reviews WHERE order_id = $1 AND user_id = $2 LIMIT 1",
+      [orderId, userId]
+    );
+
+    if (result.rows.length > 0) {
+      return res.json({
+        hasReview: true,
+        review: result.rows[0],
+      });
+    }
+
+    res.json({ hasReview: false });
+  } catch (error) {
+    logger.error("Error al obtener reseña:", error);
+    res.status(500).json({ error: "Error al obtener reseña" });
+  }
+});
+
+// Cambio de contraseña
+router.put("/password", verifyToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Se requieren la contraseña actual y la nueva contraseña",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "La nueva contraseña debe tener al menos 8 caracteres",
+      });
+    }
+
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])/;
+    if (!passwordRegex.test(newPassword)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "La contraseña debe contener al menos una mayúscula, una minúscula, un número y un carácter especial",
+      });
+    }
+
+    const { rows } = await pool.query(
+      "SELECT id, email, password FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Usuario no encontrado",
+      });
+    }
+
+    const user = rows[0];
+
+    const isPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.password
+    );
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: "La contraseña actual es incorrecta",
+      });
+    }
+
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: "La nueva contraseña debe ser diferente a la actual",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+    await pool.query(
+      "UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2",
+      [hashedPassword, userId]
+    );
+
+    try {
+      const ipAddress =
+        req.headers["x-forwarded-for"] ||
+        req.connection.remoteAddress ||
+        req.ip;
+
+      await pool.query(
+        `INSERT INTO password_change_log (user_id, changed_at, ip_address)
+         VALUES ($1, NOW(), $2)`,
+        [userId, ipAddress]
+      );
+    } catch (auditErr) {
+      logger.warn("No se pudo registrar el cambio de contraseña:", auditErr);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Contraseña actualizada exitosamente",
+    });
+  } catch (error) {
+    logger.error("❌ Error al actualizar contraseña:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error interno del servidor al actualizar la contraseña",
+    });
   }
 });
 

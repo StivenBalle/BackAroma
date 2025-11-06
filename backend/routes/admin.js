@@ -1,6 +1,7 @@
 import express from "express";
 import { verifyToken } from "../middleware/jwt.js";
-import pool from "../db.js";
+import logger from "../utils/logger.js";
+import pool from "../database/db.js";
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ const BASE_URL =
 
 // Middleware para verificar admin
 const requireAdmin = (req, res, next) => {
-  console.log("Usuario en middleware:", req.user);
+  logger.log("Usuario en middleware:", req.user);
   if (req.user.role !== "admin") {
     return res
       .status(403)
@@ -31,10 +32,10 @@ router.get("/orders", verifyToken, requireAdmin, async (req, res) => {
       LEFT JOIN users u ON c.user_id = u.id
       ORDER BY c.fecha DESC
     `);
-    console.log("Órdenes enviadas:", JSON.stringify(result.rows, null, 2)); // Depuración
+    logger.log("Órdenes enviadas:", JSON.stringify(result.rows, null, 2)); // Depuración
     res.json({ orders: result.rows });
   } catch (error) {
-    console.error("❌ Error fetching orders:", error.message);
+    logger.error("❌ Error fetching orders:", error.message);
     res.status(500).json({ error: "Error al cargar órdenes" });
   }
 });
@@ -67,10 +68,10 @@ router.get("/users", verifyToken, requireAdmin, async (req, res) => {
         : null,
     }));
 
-    console.log("Usuarios encontrados:", result.rows.length);
+    logger.log("Usuarios encontrados:", result.rows.length);
     res.json({ users });
   } catch (error) {
-    console.error("❌ Error fetching users:", error.message);
+    logger.error("❌ Error fetching users:", error.message);
     res.status(500).json({ error: "Error al buscar usuarios" });
   }
 });
@@ -108,10 +109,10 @@ router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
-    console.log("Usuario eliminado:", userId);
+    logger.log("Usuario eliminado:", userId);
     res.json({ success: true });
   } catch (error) {
-    console.error("❌ Error deleting user:", error.message);
+    logger.error("❌ Error deleting user:", error.message);
     res.status(500).json({ error: "Error al eliminar usuario" });
   }
 });
@@ -158,7 +159,7 @@ router.get(
 
       res.json(user);
     } catch (err) {
-      console.error("❌ Error fetching user profile:", err.message);
+      logger.error("❌ Error fetching user profile:", err.message);
       next(err);
     }
   }
@@ -201,7 +202,7 @@ router.get(
 
       res.json({ compras });
     } catch (err) {
-      console.error("❌ Error fetching user purchase history:", err.message);
+      logger.error("❌ Error fetching user purchase history:", err.message);
       next(err);
     }
   }
@@ -247,10 +248,10 @@ router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
-    console.log("Rol cambiado para usuario:", userId, "Nuevo rol:", newRole);
+    logger.log("Rol cambiado para usuario:", userId, "Nuevo rol:", newRole);
     res.json({ success: true, user: result.rows[0] });
   } catch (error) {
-    console.error("❌ Error updating user role:", error.message);
+    logger.error("❌ Error updating user role:", error.message);
     res.status(500).json({ error: "Error al cambiar rol" });
   }
 });
@@ -273,7 +274,7 @@ router.get(
     `);
       res.json(result.rows);
     } catch (error) {
-      console.error("Error al obtener ventas por mes:", error);
+      logger.error("Error al obtener ventas por mes:", error);
       res.status(500).json({ error: "Error al obtener ventas por mes" });
     }
   }
@@ -298,7 +299,7 @@ router.get(
     `);
       res.json(result.rows);
     } catch (error) {
-      console.error("Error al obtener productos más vendidos:", error);
+      logger.error("Error al obtener productos más vendidos:", error);
       res
         .status(500)
         .json({ error: "Error al obtener productos más vendidos" });
@@ -323,7 +324,7 @@ router.get(
     `);
       res.json(result.rows);
     } catch (error) {
-      console.error("Error al obtener usuarios por mes:", error);
+      logger.error("Error al obtener usuarios por mes:", error);
       res.status(500).json({ error: "Error al obtener usuarios por mes" });
     }
   }
@@ -361,7 +362,7 @@ router.patch(
 
       res.json({ success: true, status });
     } catch (error) {
-      console.error("Error actualizando estado:", error);
+      logger.error("Error actualizando estado:", error);
       res.status(500).json({ error: "Error interno del servidor" });
     }
   }
