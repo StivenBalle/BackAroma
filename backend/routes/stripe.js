@@ -4,7 +4,7 @@ import Twilio from "twilio";
 import pool from "../database/db.js";
 import logger from "../utils/logger.js";
 import { verifyToken } from "../middleware/jwt.js";
-
+import inputProtect from "../middleware/inputProtect.js";
 import {
   STRIPE_SECRET_KEY,
   FRONTEND_URL,
@@ -18,6 +18,17 @@ import {
 const router = express.Router();
 const stripe = new Stripe(STRIPE_SECRET_KEY);
 const twilioClient = Twilio(ACCOUNT_SSD, AUTH_TOKEN);
+
+router.use((req, res, next) => {
+  if (req.originalUrl === "/api/stripe/webhook") {
+    return next();
+  }
+
+  if (req.body && Object.keys(req.body).length > 0) {
+    req.body = inputProtect.sanitizeObjectRecursivelyServer(req.body);
+  }
+  next();
+});
 
 // Webhook para manejar eventos de stripe
 router.post(
@@ -34,27 +45,32 @@ router.post(
         STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      logger.error("❌ Webhook error:", err.message);
+      logger.error("❌ Webhook error (firma inválida): ", err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
+    const safeEvent = inputProtect.sanitizeObjectRecursivelyServer(event);
+    if (!safeEvent || !safeEvent.type) {
+      return res.status(400).json({ error: "Evento inválido" });
+    }
 
-      logger.log(
-        "🔍 session.shipping_details:",
-        JSON.stringify(session.shipping_details, null, 2)
+    if (safeEvent.type === "checkout.session.completed") {
+      const session = safeEvent.data.object;
+
+      const sessionId = inputProtect.sanitizeServerString(session.id);
+      const metadata = inputProtect.sanitizeObjectRecursivelyServer(
+        session.metadata || {}
       );
-      logger.log(
-        "🔍 session.customer_details:",
-        JSON.stringify(session.customer_details, null, 2)
+      const customerName = inputProtect.sanitizeServerString(
+        session.customer_details?.name || "Desconocido"
       );
-      logger.log(
-        "🔍 session.shipping:",
-        JSON.stringify(session.shipping, null, 2)
+      const shippingAddress = inputProtect.sanitizeObjectRecursivelyServer(
+        session.customer_details?.address || {}
       );
 
-      let productData, priceId, price, product;
+      logger.log(`🧾 Pago completado (seguro) para sesión ${sessionId}`);
+
+      let productData, product;
       try {
         const lineItems = await stripe.checkout.sessions.listLineItems(
           session.id,
@@ -63,9 +79,7 @@ router.post(
           }
         );
         productData = lineItems.data[0];
-        priceId = productData.price.id;
-        price = productData.price;
-        product = price.product;
+        product = productData.price.product;
       } catch (err) {
         logger.error("❌ Error obteniendo lineItems:", err.message);
         return res
@@ -73,17 +87,11 @@ router.post(
           .json({ error: "Error obteniendo ítems de la compra" });
       }
 
-      const shippingAddress = session.customer_details?.address || {};
-      logger.log(
-        "🔍 shippingAddress:",
-        JSON.stringify(shippingAddress, null, 2)
-      );
-
       let phone = null;
       try {
         const userResult = await pool.query(
           `SELECT phone_number FROM users WHERE id = $1`,
-          [parseInt(session.metadata.user_id)]
+          [parseInt(metadata.user_id)]
         );
         phone = userResult.rows[0]?.phone_number || null;
         logger.log("user.phone_number from DB:", phone);
@@ -107,11 +115,11 @@ router.post(
           `INSERT INTO compras (user_id, producto, precio, fecha, status, phone, shipping_address, stripe_session_id, image)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
           [
-            parseInt(session.metadata.user_id),
-            product.name,
+            parseInt(metadata.user_id),
+            inputProtect.preventSQLInjection(product.name),
             productData.amount_total / 100,
             new Date(),
-            "paid",
+            "pendiente",
             phone,
             JSON.stringify(shippingAddress),
             session.id,
@@ -132,14 +140,14 @@ router.post(
       await sendAdminNotification(
         orderId,
         product.name,
-        session.customer_details?.name || "Desconocido",
+        customerName || "Desconocido",
         phone,
         addressString
       );
 
       if (phone) {
         await sendUserNotification(
-          session.customer_details?.name || "Cliente",
+          customerName || "Cliente",
           product.name,
           productData.amount_total / 100,
           phone,
@@ -234,17 +242,30 @@ async function sendUserNotification(
 // Crear sesión de checkout para compra única
 router.post("/create-checkout-session", verifyToken, async (req, res) => {
   try {
-    const { priceId, customer_email } = req.body;
+    const { priceId } = inputProtect.sanitizeObjectRecursivelyServer(req.body);
+
+    const userData = await pool.query("SELECT email FROM users WHERE id = $1", [
+      req.user.id,
+    ]);
+    const customer_email = userData.rows[0]?.email;
+
     if (!req.user || !req.user.id) {
       return res.status(401).json({ error: "Usuario no autenticado" });
     }
+    if (!priceId || !customer_email) {
+      return res.status(400).json({ error: "Datos incompletos" });
+    }
+    if (!inputProtect.validateEmailServer(customer_email)) {
+      return res.status(400).json({ error: "Correo inválido" });
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${FRONTEND_URL}/successfullPayment?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${FRONTEND_URL}/paymentCanceled`,
-      customer_email: customer_email,
+      customer_email,
       billing_address_collection: "auto",
       shipping_address_collection: {
         allowed_countries: ["CO"],

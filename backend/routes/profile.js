@@ -7,6 +7,8 @@ import pool from "../database/db.js";
 import { verifyToken } from "../middleware/jwt.js";
 import logger from "../utils/logger.js";
 import { fileURLToPath } from "url";
+import inputProtect from "../middleware/inputProtect.js";
+import { fileTypeFromFile } from "file-type";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,35 +19,50 @@ const BASE_URL =
     ? "https://backendaromaserrania.onrender.com"
     : "http://localhost:3000";
 
-// Configuración de multer
+// ====== MULTER CONFIG ======
+const uploadDir = path.join(__dirname, "../../uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, "../../uploads");
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
+  destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${req.user.id}-${Date.now()}${ext}`);
+    const validation = inputProtect.validateFilename(file.originalname);
+
+    if (!validation.valid) {
+      return cb(new Error(validation.reason));
+    }
+
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const ext = path.extname(validation.sanitized);
+    const name = path.basename(validation.sanitized, ext);
+
+    cb(null, `${name}-${uniqueSuffix}${ext}`);
   },
 });
 
 const fileFilter = (req, file, cb) => {
-  logger.log("📥 Procesando archivo en multer:", file);
-  const allowedTypes = ["image/jpeg", "image/png"];
-  if (allowedTypes.includes(file.mimetype)) {
+  const allowed = ["image/jpeg", "image/png"];
+  if (allowed.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Solo se permiten imágenes JPEG o PNG"), false);
+    cb(new Error("Solo se permiten imágenes JPEG o PNG"));
   }
 };
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+router.use((req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    req.body = inputProtect.sanitizeObjectRecursivelyServer(req.body);
+  }
+  if (req.params && typeof req.params === "object") {
+    req.params = inputProtect.sanitizeObjectRecursivelyServer(req.params);
+  }
+  next();
 });
 
 // POST /api/user/profile-image - Cargar imagen de perfil
@@ -56,10 +73,7 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.id;
-      logger.log(
-        `📥 POST /api/user/profile-image - userId: ${userId}, file:`,
-        req.file
-      );
+      logger.log(`📥 POST /api/user/profile-image - userId: ${userId}`);
 
       if (!req.file) {
         return res
@@ -67,35 +81,56 @@ router.post(
           .json({ error: "No se proporcionó ninguna imagen" });
       }
 
+      const filePath = path.join(uploadDir, req.file.filename);
+      const ft = await fileTypeFromFile(filePath).catch(() => null);
+      if (!ft || !["image/jpeg", "image/png"].includes(ft.mime)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {
+          /* noop */
+        }
+        logger.warn(
+          `Archivo eliminado por mismatch MIME: ${req.file.filename}`
+        );
+        return res.status(400).json({ error: "Archivo no válido" });
+      }
+
       const imagePath = `/uploads/${req.file.filename}`;
-      const fullImageUrl = `${BASE_URL}${imagePath}`;
 
       const result = await pool.query(
-        `UPDATE users 
-         SET image = $1 
-         WHERE id = $2 
-         RETURNING image`,
+        `UPDATE users SET image = $1 WHERE id = $2 RETURNING image`,
         [imagePath, userId]
       );
 
+      if (!result.rows[0]) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {
+          /* noop */
+        }
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      const fullImageUrl = `${BASE_URL}${imagePath}`;
       logger.log("📤 Imagen de perfil cargada:", fullImageUrl);
-      res.json({
+
+      return res.json({
         message: "Imagen de perfil cargada correctamente",
         image: fullImageUrl,
       });
     } catch (err) {
-      logger.error("❌ Error uploading profile image:", err.message);
+      logger.error("❌ Error uploading profile image:", err.message || err);
       next(err);
     }
   }
 );
 
-// 🟡 GET /api/user/profile - Obtener datos del perfil
+// GET /api/user/profile - Obtener datos del perfil
 router.get("/profile", verifyToken, async (req, res, next) => {
   try {
     const userId = req.user.id;
     const result = await pool.query(
-      `SELECT name, email, phone_number, role, image,  auth_provider, address, created_at FROM users WHERE id = $1`,
+      `SELECT name, email, phone_number, role, image, auth_provider, address, created_at FROM users WHERE id = $1`,
       [userId]
     );
 
@@ -104,8 +139,6 @@ router.get("/profile", verifyToken, async (req, res, next) => {
     }
 
     const user = result.rows[0];
-
-    // Si el usuario tiene imagen, generar URL completa
     user.image = user.image ? `${BASE_URL}${user.image}` : null;
 
     res.json(user);
@@ -115,13 +148,11 @@ router.get("/profile", verifyToken, async (req, res, next) => {
   }
 });
 
-// 🔴 DELETE /api/user/delete-image - Eliminar imagen de perfil
+// DELETE /api/user/delete-image - Eliminar imagen de perfil
 router.delete("/delete-image", verifyToken, async (req, res, next) => {
   try {
     const userId = req.user.id;
-    logger.log(`📥 DELETE /api/user/profile-image - userId: ${userId}`);
 
-    // Obtener la ruta de la imagen actual
     const result = await pool.query(`SELECT image FROM users WHERE id = $1`, [
       userId,
     ]);
@@ -152,17 +183,22 @@ router.delete("/delete-image", verifyToken, async (req, res, next) => {
 router.put("/update", verifyToken, async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { name, phone } = req.body;
+    const name = inputProtect.sanitizeString(req.body.name || "");
+    const phone = inputProtect.sanitizeString(req.body.phone || null);
+
     if (!name) {
       return res.status(400).json({ error: "El nombre es requerido" });
     }
+
     const result = await pool.query(
       `UPDATE users SET name = $1, phone_number = $2 WHERE id = $3 RETURNING name, phone_number`,
       [name, phone || null, userId]
     );
+
     if (!result.rows[0]) {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
+
     res.json({
       message: "Perfil actualizado correctamente",
       ...result.rows[0],
@@ -185,7 +221,6 @@ router.put("/update/shipping-address", verifyToken, async (req, res, next) => {
         .json({ error: "Calle, ciudad y país son requeridos" });
     }
 
-    // Verificar si el usuario ya tiene una dirección
     const checkResult = await pool.query(
       `SELECT address FROM users WHERE id = $1`,
       [userId]
@@ -198,7 +233,13 @@ router.put("/update/shipping-address", verifyToken, async (req, res, next) => {
       });
     }
 
-    const newAddress = { line1, city, country, postal_code, state };
+    const newAddress = {
+      line1: inputProtect.sanitizeString(line1),
+      city: inputProtect.sanitizeString(city),
+      country: inputProtect.sanitizeString(country),
+      postal_code: inputProtect.sanitizeString(postal_code || ""),
+      state: inputProtect.sanitizeString(state || ""),
+    };
 
     const result = await pool.query(
       `UPDATE users SET address = $1 WHERE id = $2 RETURNING address`,
@@ -227,7 +268,6 @@ router.post("/add/shipping-address", verifyToken, async (req, res, next) => {
         .json({ error: "Calle, ciudad y país son requeridos" });
     }
 
-    // Verificar si el usuario ya tiene una dirección
     const checkResult = await pool.query(
       `SELECT address FROM users WHERE id = $1`,
       [userId]
@@ -239,7 +279,13 @@ router.post("/add/shipping-address", verifyToken, async (req, res, next) => {
         .json({ error: "Ya existe una dirección. Usa PUT para actualizarla." });
     }
 
-    const newAddress = { line1, city, country, postal_code, state };
+    const newAddress = {
+      line1: inputProtect.sanitizeString(line1),
+      city: inputProtect.sanitizeString(city),
+      country: inputProtect.sanitizeString(country),
+      postal_code: inputProtect.sanitizeString(postal_code || ""),
+      state: inputProtect.sanitizeString(state || ""),
+    };
 
     const result = await pool.query(
       `UPDATE users SET address = $1 WHERE id = $2 RETURNING address`,
@@ -278,14 +324,25 @@ router.get("/shipping-address", verifyToken, async (req, res, next) => {
 // POST - Crear reseña
 router.post("/reviews", verifyToken, async (req, res) => {
   try {
-    const { orderId, rating, comment } = req.body;
+    const raw = req.body;
+    const orderId = inputProtect.sanitizeNumeric(raw.orderId);
+    const rating = inputProtect.sanitizeNumeric(raw.rating);
+    const comment = inputProtect.sanitizeServerString(raw.comment || "", {
+      maxLen: 1000,
+    });
     const userId = req.user.id;
 
-    if (!orderId || !rating || !comment) {
+    if (!orderId || !rating || comment.trim() === "") {
       return res.status(400).json({ error: "Faltan campos obligatorios" });
     }
 
-    // Verificar si ya existe una reseña para este pedido
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: "orderId inválido" });
+    }
+
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: "rating debe estar entre 1 y 5" });
+    }
     const checkReview = await pool.query(
       "SELECT id FROM reviews WHERE order_id = $1",
       [orderId]
@@ -296,9 +353,8 @@ router.post("/reviews", verifyToken, async (req, res) => {
         .json({ error: "Ya existe una reseña para este pedido" });
     }
 
-    // Verificar que la orden pertenezca al usuario
     const checkOrder = await pool.query(
-      "SELECT * FROM compras WHERE id = $1 AND user_id = $2",
+      "SELECT id FROM compras WHERE id = $1 AND user_id = $2",
       [orderId, userId]
     );
     if (checkOrder.rows.length === 0) {
@@ -346,8 +402,11 @@ router.get("/reviews", async (req, res) => {
 // 🔹 Verificar si una orden ya tiene reseña
 router.get("/reviews/order/:orderId", verifyToken, async (req, res) => {
   try {
-    const { orderId } = req.params;
+    const orderId = parseInt(inputProtect.sanitizeString(req.params.orderId));
     const userId = req.user.id;
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: "orderId inválido" });
+    }
 
     const result = await pool.query(
       "SELECT rating, comment FROM reviews WHERE order_id = $1 AND user_id = $2 LIMIT 1",
@@ -371,7 +430,10 @@ router.get("/reviews/order/:orderId", verifyToken, async (req, res) => {
 // Cambio de contraseña
 router.put("/password", verifyToken, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const currentPassword = inputProtect.sanitizeString(
+      req.body.currentPassword || ""
+    );
+    const newPassword = inputProtect.sanitizeString(req.body.newPassword || "");
     const userId = req.user.id;
 
     if (!currentPassword || !newPassword) {
@@ -389,7 +451,7 @@ router.put("/password", verifyToken, async (req, res) => {
     }
 
     const passwordRegex =
-      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])/;
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>])/;
     if (!passwordRegex.test(newPassword)) {
       return res.status(400).json({
         success: false,
@@ -432,17 +494,28 @@ router.put("/password", verifyToken, async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
+    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [
+      hashedPassword,
+      userId,
+    ]);
 
-    await pool.query(
-      "UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2",
-      [hashedPassword, userId]
-    );
+    try {
+      await pool.query("UPDATE users SET updated_at = NOW() WHERE id = $1", [
+        userId,
+      ]);
+    } catch (e) {
+      logger.warn(
+        "Columna updated_at no actualizada (posible ausencia):",
+        e.message
+      );
+    }
 
     try {
       const ipAddress =
         req.headers["x-forwarded-for"] ||
-        req.connection.remoteAddress ||
-        req.ip;
+        req.connection?.remoteAddress ||
+        req.ip ||
+        null;
 
       await pool.query(
         `INSERT INTO password_change_log (user_id, changed_at, ip_address)

@@ -2,6 +2,7 @@ import express from "express";
 import { verifyToken } from "../middleware/jwt.js";
 import logger from "../utils/logger.js";
 import pool from "../database/db.js";
+import inputProtect from "../middleware/inputProtect.js";
 
 const router = express.Router();
 
@@ -12,15 +13,21 @@ const BASE_URL =
 
 // Middleware para verificar admin
 const requireAdmin = (req, res, next) => {
-  logger.log("Usuario en middleware:", req.user);
-  if (req.user.role !== "admin") {
-    return res
-      .status(403)
-      .json({ error: "Acceso denegado: Solo administradores" });
+  try {
+    logger.log("Verificando rol:", req.user);
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ error: "Acceso denegado: Solo administradores" });
+    }
+    next();
+  } catch (err) {
+    logger.error("❌ Error en requireAdmin:", err.message);
+    res.status(500).json({ error: "Error interno en verificación de rol" });
   }
-  next();
 };
 
+// Obtener todas las órdenes
 router.get("/orders", verifyToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -32,7 +39,7 @@ router.get("/orders", verifyToken, requireAdmin, async (req, res) => {
       LEFT JOIN users u ON c.user_id = u.id
       ORDER BY c.fecha DESC
     `);
-    logger.log("Órdenes enviadas:", JSON.stringify(result.rows, null, 2)); // Depuración
+
     res.json({ orders: result.rows });
   } catch (error) {
     logger.error("❌ Error fetching orders:", error.message);
@@ -40,10 +47,12 @@ router.get("/orders", verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
-// 🔹 NUEVO ENDPOINT: Buscar usuarios (por nombre o email)
+// Buscar usuarios (por nombre o email)
 router.get("/users", verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { search } = req.query;
+    let { search } = req.query;
+    search = inputProtect.sanitizeString(search);
+
     let query = `
       SELECT id, name, email, role, image
       FROM users 
@@ -61,14 +70,15 @@ router.get("/users", verifyToken, requireAdmin, async (req, res) => {
 
     const users = result.rows.map((user) => ({
       ...user,
+      name: inputProtect.escapeOutput(user.name),
+      email: inputProtect.escapeOutput(user.email),
       image: user.image
-        ? user.image.startsWith("http://") || user.image.startsWith("https://")
+        ? user.image.startsWith("http")
           ? user.image
           : `${BASE_URL}${user.image}`
         : null,
     }));
 
-    logger.log("Usuarios encontrados:", result.rows.length);
     res.json({ users });
   } catch (error) {
     logger.error("❌ Error fetching users:", error.message);
@@ -76,25 +86,31 @@ router.get("/users", verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
-// 🔹 NUEVO ENDPOINT: Eliminar usuario
+// Eliminar usuario
 router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = parseInt(id);
+    const userId = inputProtect.sanitizeNumeric(req.params.id);
 
-    // Verificar que no sea el admin actual
     if (userId === req.user.id) {
       return res
         .status(400)
         .json({ error: "No puedes eliminar tu propia cuenta" });
     }
 
-    // Opcional: Verificar si es el último admin (para no dejar la app sin admins)
-    const adminCount = await pool.query(
+    const adminCountResult = await pool.query(
       "SELECT COUNT(*) FROM users WHERE role = 'admin'"
     );
+    const adminCount = parseInt(adminCountResult.rows[0].count, 10);
+
+    const deletingUser = await pool.query(
+      "SELECT role FROM users WHERE id = $1",
+      [userId]
+    );
+    const deletingRole = deletingUser.rows[0]?.role;
+
     const isLastAdmin =
-      adminCount.rows[0].count === "1" && req.user.role === "admin";
+      deletingRole === "admin" && adminCount === 1 && req.user.role === "admin";
+
     if (isLastAdmin) {
       return res
         .status(400)
@@ -105,11 +121,12 @@ router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
       "DELETE FROM users WHERE id = $1 RETURNING id",
       [userId]
     );
+
     if (result.rowCount === 0) {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
-    logger.log("Usuario eliminado:", userId);
+    logger.log("✅ Usuario eliminado:", userId);
     res.json({ success: true });
   } catch (error) {
     logger.error("❌ Error deleting user:", error.message);
@@ -117,105 +134,68 @@ router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/admin/users/:userId - Obtener perfil completo de un usuario
-router.get(
-  "/users/:userId",
-  verifyToken,
-  requireAdmin,
-  async (req, res, next) => {
-    try {
-      const { userId } = req.params;
+// Perfil completo del usuario
+router.get("/users/:userId", verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const userId = inputProtect.sanitizeNumeric(req.params.userId);
 
-      const result = await pool.query(
-        `SELECT id, name, email, phone_number, role, image, auth_provider, address, created_at 
+    const result = await pool.query(
+      `SELECT id, name, email, phone_number, role, image, auth_provider, address, created_at 
        FROM users WHERE id = $1`,
-        [userId]
-      );
+      [userId]
+    );
 
-      if (!result.rows[0]) {
-        return res.status(404).json({ error: "Usuario no encontrado" });
-      }
-
-      const user = result.rows[0];
-
-      if (user.image) {
-        user.image = user.image.startsWith("http")
-          ? user.image
-          : `${process.env.BASE_URL || "http://localhost:3000"}${user.image}`;
-      }
-
-      if (user.address) {
-        const addr = user.address;
-        user.address_display = `${addr.line1 || ""}${
-          addr.city ? ", " + addr.city : ""
-        }${addr.state ? ", " + addr.state : ""}${
-          addr.country ? ", " + addr.country : ""
-        }${addr.postal_code ? " - " + addr.postal_code : ""}`;
-        user.address_full = addr;
-      } else {
-        user.address_display = null;
-        user.address_full = null;
-      }
-
-      res.json(user);
-    } catch (err) {
-      logger.error("❌ Error fetching user profile:", err.message);
-      next(err);
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
     }
-  }
-);
 
-// GET /api/admin/users/:userId/historial - Obtener historial de compras de un usuario
+    const user = result.rows[0];
+    user.name = inputProtect.escapeOutput(user.name);
+    user.email = inputProtect.escapeOutput(user.email);
+
+    if (user.image && !user.image.startsWith("http")) {
+      user.image = `${BASE_URL}${user.image}`;
+    }
+
+    res.json(user);
+  } catch (err) {
+    logger.error("❌ Error fetching user profile:", err.message);
+    res.status(500).json({ error: "Error al obtener perfil del usuario" });
+  }
+});
+
+// Historial de compras de un usuario
 router.get(
   "/users/:userId/historial",
   verifyToken,
   requireAdmin,
-  async (req, res, next) => {
+  async (req, res) => {
     try {
-      const { userId } = req.params;
+      const userId = inputProtect.sanitizeNumeric(req.params.userId);
 
       const result = await pool.query(
         `SELECT 
-        c.id,
-        c.producto,
-        c.precio::float as precio,
-        c.fecha,
-        c.status,
-        c.shipping_address,
-        u.address FROM compras c
-       LEFT JOIN users u ON c.user_id = u.id
-       WHERE c.user_id = $1
-       ORDER BY c.fecha DESC`,
+          c.id, c.producto, c.precio::float as precio, c.fecha, c.status, c.shipping_address
+         FROM compras c
+         WHERE c.user_id = $1
+         ORDER BY c.fecha DESC`,
         [userId]
       );
 
-      const compras = result.rows.map((row) => {
-        return {
-          id: row.id,
-          producto: row.producto,
-          precio: row.precio,
-          fecha: row.fecha,
-          status: row.status,
-          shipping_address: row.user_address || null,
-        };
-      });
-
-      res.json({ compras });
+      res.json({ compras: result.rows });
     } catch (err) {
       logger.error("❌ Error fetching user purchase history:", err.message);
-      next(err);
+      res.status(500).json({ error: "Error al obtener historial de usuario" });
     }
   }
 );
 
-// 🔹 NUEVO ENDPOINT: Cambiar rol de usuario
+// Cambiar rol de usuario
 router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { role: newRole } = req.body;
-    const userId = parseInt(id);
+    const userId = inputProtect.sanitizeNumeric(req.params.id);
+    const newRole = inputProtect.sanitizeString(req.body.role);
 
-    // Validaciones
     if (!["admin", "user"].includes(newRole)) {
       return res
         .status(400)
@@ -224,19 +204,6 @@ router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
 
     if (userId === req.user.id) {
       return res.status(400).json({ error: "No puedes cambiar tu propio rol" });
-    }
-
-    // Opcional: Si cambias a admin, verifica si ya hay muchos admins (límite arbitrario)
-    if (newRole === "admin") {
-      const adminCount = await pool.query(
-        "SELECT COUNT(*) FROM users WHERE role = 'admin'"
-      );
-      if (parseInt(adminCount.rows[0].count) >= 5) {
-        // Ejemplo: límite de 5 admins
-        return res
-          .status(400)
-          .json({ error: "Límite de administradores alcanzado" });
-      }
     }
 
     const result = await pool.query(
@@ -248,7 +215,6 @@ router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
-    logger.log("Rol cambiado para usuario:", userId, "Nuevo rol:", newRole);
     res.json({ success: true, user: result.rows[0] });
   } catch (error) {
     logger.error("❌ Error updating user role:", error.message);
@@ -256,7 +222,7 @@ router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Compras por mes
+// Ventas por mes
 router.get(
   "/stats/sales-by-month",
   verifyToken,
@@ -264,17 +230,17 @@ router.get(
   async (req, res) => {
     try {
       const result = await pool.query(`
-      SELECT 
-        TO_CHAR(fecha, 'YYYY-MM') AS mes,
-        COUNT(*) AS total_compras,
-        SUM(precio) AS total_ventas
-      FROM compras
-      GROUP BY mes
-      ORDER BY mes ASC;
-    `);
+        SELECT 
+          TO_CHAR(fecha, 'YYYY-MM') AS mes,
+          COUNT(*) AS total_compras,
+          SUM(precio) AS total_ventas
+        FROM compras
+        GROUP BY mes
+        ORDER BY mes ASC;
+      `);
       res.json(result.rows);
     } catch (error) {
-      logger.error("Error al obtener ventas por mes:", error);
+      logger.error("❌ Error al obtener ventas por mes:", error.message);
       res.status(500).json({ error: "Error al obtener ventas por mes" });
     }
   }
@@ -288,18 +254,19 @@ router.get(
   async (req, res) => {
     try {
       const result = await pool.query(`
-      SELECT 
-        producto, 
-        COUNT(*) AS cantidad_vendida,
-        SUM(precio) AS total_ventas
-      FROM compras
-      GROUP BY producto
-      ORDER BY cantidad_vendida DESC
-      LIMIT 5;
-    `);
+        SELECT 
+          producto, COUNT(*) AS cantidad_vendida, SUM(precio) AS total_ventas
+        FROM compras
+        GROUP BY producto
+        ORDER BY cantidad_vendida DESC
+        LIMIT 5;
+      `);
       res.json(result.rows);
     } catch (error) {
-      logger.error("Error al obtener productos más vendidos:", error);
+      logger.error(
+        "❌ Error al obtener productos más vendidos:",
+        error.message
+      );
       res
         .status(500)
         .json({ error: "Error al obtener productos más vendidos" });
@@ -315,31 +282,31 @@ router.get(
   async (req, res) => {
     try {
       const result = await pool.query(`
-      SELECT 
-        TO_CHAR(created_at, 'YYYY-MM') AS mes,
-        COUNT(*) AS nuevos_usuarios
-      FROM users
-      GROUP BY mes
-      ORDER BY mes ASC;
-    `);
+        SELECT 
+          TO_CHAR(created_at, 'YYYY-MM') AS mes,
+          COUNT(*) AS nuevos_usuarios
+        FROM users
+        GROUP BY mes
+        ORDER BY mes ASC;
+      `);
       res.json(result.rows);
     } catch (error) {
-      logger.error("Error al obtener usuarios por mes:", error);
+      logger.error("❌ Error al obtener usuarios por mes:", error.message);
       res.status(500).json({ error: "Error al obtener usuarios por mes" });
     }
   }
 );
 
+// Cambiar estado de orden
 router.patch(
   "/change-order/:id/status",
   verifyToken,
   requireAdmin,
   async (req, res) => {
     try {
-      const { id } = req.params;
-      const { status } = req.body;
+      const id = inputProtect.sanitizeNumeric(req.params.id);
+      const status = inputProtect.sanitizeString(req.body.status);
 
-      // Validar estado permitido
       const validStatuses = [
         "pendiente",
         "procesando",
@@ -362,7 +329,7 @@ router.patch(
 
       res.json({ success: true, status });
     } catch (error) {
-      logger.error("Error actualizando estado:", error);
+      logger.error("❌ Error actualizando estado:", error.message);
       res.status(500).json({ error: "Error interno del servidor" });
     }
   }

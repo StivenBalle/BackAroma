@@ -4,6 +4,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
+import multer from "multer";
 import passport from "passport";
 import errorHandler from "./backend/utils/errorHandler.js";
 import authRoutes from "./backend/routes/auth.js";
@@ -13,12 +14,24 @@ import stripeRoutes from "./backend/routes/stripe.js";
 import googleAuthRoutes from "./backend/routes/loginGoogle.js";
 import profileRoutes from "./backend/routes/profile.js";
 import logger from "./backend/utils/logger.js";
+import { securityMiddlewares } from "./backend/middleware/inputProtect.js";
 import {
   FRONTEND_URL,
   NODE_ENV,
   STRIPE_PUBLIC_KEY,
   PORTG,
 } from "./backend/utils/config.js";
+
+/*
+// Https con fuerza bruta
+const https = require("https");
+const fs = require("fs");
+const options = {
+  key: fs.readFileSync("llave-privada.pem"),
+  cert: fs.readFileSync("certificado.pem"),
+};
+https.createServer(options, app).listen(443);
+*/
 
 // --- Configuración inicial ---
 const __filename = fileURLToPath(import.meta.url);
@@ -63,6 +76,7 @@ app.use((req, res, next) => {
 
 app.use("/api", stripeRoutes);
 
+await securityMiddlewares(app);
 app.use(express.json());
 app.use(passport.initialize());
 // --- Rutas API ---

@@ -1,7 +1,5 @@
 import pkg from "pg";
 import logger from "../utils/logger.js";
-
-const { Pool } = pkg;
 import {
   DB_HOST,
   DB_USER,
@@ -9,38 +7,63 @@ import {
   DATABASE_URL,
   DB_PORT,
   DB_NAME,
+  NODE_ENV,
 } from "../utils/config.js";
+import { sanitizeServerString } from "../middleware/inputProtect.js";
+
+const { Pool } = pkg;
+
+const sanitizedConfig = {
+  host: sanitizeServerString(DB_HOST),
+  port: parseInt(DB_PORT, 10) || 5432,
+  user: sanitizeServerString(DB_USER),
+  password: sanitizeServerString(DB_PASSWORD),
+  database: sanitizeServerString(DB_NAME),
+  connectionString: sanitizeServerString(DATABASE_URL || ""),
+};
 
 const pool = new Pool({
-  connectionString: DATABASE_URL,
-  host: DB_HOST,
-  port: DB_PORT,
-  user: DB_USER,
-  password: DB_PASSWORD,
-  database: DB_NAME,
+  connectionString: sanitizedConfig.connectionString || undefined,
+  host: sanitizedConfig.host,
+  port: sanitizedConfig.port,
+  user: sanitizedConfig.user,
+  password: sanitizedConfig.password,
+  database: sanitizedConfig.database,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-  ssl: false,
+  connectionTimeoutMillis: 5000,
+  ssl: NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
 
-// Logs de verificación
 logger.log("🛠️ Verificando configuración de base de datos:");
-logger.log("URL:", DATABASE_URL);
-logger.log("Host:", DB_HOST);
-logger.log("Puerto:", DB_PORT);
-logger.log("Usuario:", DB_USER);
-logger.log("Contraseña:", DB_PASSWORD ? "✔️ cargada" : "❌ vacía");
-logger.log("Base de datos:", DB_NAME);
+logger.log(`Host: ${DB_HOST}`);
+logger.log(`Puerto: ${DB_PORT}`);
+logger.log(`Usuario: ${DB_USER}`);
+logger.log(`Base de datos: ${DB_NAME}`);
+logger.log(
+  `Modo: ${
+    NODE_ENV === "production" ? "Producción (SSL activo)" : "Desarrollo"
+  }`
+);
 
-// Probar la conexión
-(async () => {
-  try {
-    const client = await pool.connect();
-    logger.log("✅ Conexión exitosa a PostgreSQL");
-    client.release();
-  } catch (err) {
-    logger.error("❌ Error al conectar a PostgreSQL:", err.message);
+// Función de conexión con reintento automático
+async function verifyConnection(retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const client = await pool.connect();
+      logger.log("✅ Conexión exitosa a PostgreSQL");
+      client.release();
+      return;
+    } catch (err) {
+      logger.error(`Intento ${attempt} de conexión fallido: ${err.message}`);
+      if (attempt === retries) {
+        logger.error("No se pudo establecer conexión a la base de datos.");
+        throw err;
+      }
+      await new Promise((res) => setTimeout(res, 2000));
+    }
   }
-})();
+}
+
+verifyConnection();
 
 export default pool;
