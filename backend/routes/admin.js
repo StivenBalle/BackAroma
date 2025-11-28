@@ -3,34 +3,35 @@ import { verifyToken } from "../middleware/jwt.js";
 import logger from "../utils/logger.js";
 import pool from "../database/db.js";
 import inputProtect from "../middleware/inputProtect.js";
+import checkAccountLock from "../middleware/checkAccount.js";
+import { requireAdmin, requireAdminOrViewer } from "../middleware/roleCheck.js";
+import {
+  getUsersSecurity,
+  unlockUser,
+  lockUser,
+  resetAttempts,
+  getSecurityDetails,
+  getSecurityStats,
+  exportLogs,
+} from "../controllers/adminSecurity.controller.js";
+import { NODE_ENV } from "../utils/config.js";
 
 const router = express.Router();
 
 const BASE_URL =
-  process.env.NODE_ENV === "production"
+  NODE_ENV === "production"
     ? "https://backendaromaserrania.onrender.com"
     : "http://localhost:3000";
 
-// Middleware para verificar admin
-const requireAdmin = (req, res, next) => {
-  try {
-    logger.log("Verificando rol:", req.user);
-    if (req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ error: "Acceso denegado: Solo administradores" });
-    }
-    next();
-  } catch (err) {
-    logger.error("❌ Error en requireAdmin:", err.message);
-    res.status(500).json({ error: "Error interno en verificación de rol" });
-  }
-};
-
 // Obtener todas las órdenes
-router.get("/orders", verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const result = await pool.query(`
+router.get(
+  "/orders",
+  verifyToken,
+  requireAdminOrViewer,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
       SELECT 
         c.id, c.producto, c.precio::float as precio, c.fecha, c.status, c.phone, 
         c.shipping_address,
@@ -40,135 +41,163 @@ router.get("/orders", verifyToken, requireAdmin, async (req, res) => {
       ORDER BY c.fecha DESC
     `);
 
-    res.json({ orders: result.rows });
-  } catch (error) {
-    logger.error("❌ Error fetching orders:", error.message);
-    res.status(500).json({ error: "Error al cargar órdenes" });
+      res.json({ orders: result.rows });
+    } catch (error) {
+      logger.error("❌ Error fetching orders:", error.message);
+      res.status(500).json({ error: "Error al cargar órdenes" });
+    }
   }
-});
+);
 
 // Buscar usuarios (por nombre o email)
-router.get("/users", verifyToken, requireAdmin, async (req, res) => {
-  try {
-    let { search } = req.query;
-    search = inputProtect.sanitizeString(search);
+router.get(
+  "/users",
+  verifyToken,
+  requireAdminOrViewer,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      let { search } = req.query;
+      search = inputProtect.sanitizeString(search);
 
-    let query = `
+      let query = `
       SELECT id, name, email, role, image
       FROM users 
       WHERE role != 'inactive'
     `;
-    const params = [];
+      const params = [];
 
-    if (search) {
-      query += ` AND (name ILIKE $1 OR email ILIKE $1)`;
-      params.push(`%${search}%`);
+      if (search) {
+        query += ` AND (name ILIKE $1 OR email ILIKE $1)`;
+        params.push(`%${search}%`);
+      }
+
+      query += ` ORDER BY name ASC`;
+      const result = await pool.query(query, params);
+
+      const users = result.rows.map((user) => ({
+        ...user,
+        name: inputProtect.escapeOutput(user.name),
+        email: inputProtect.escapeOutput(user.email),
+        image: user.image
+          ? user.image.startsWith("http")
+            ? user.image
+            : `${BASE_URL}${user.image}`
+          : null,
+      }));
+
+      res.json({ users });
+    } catch (error) {
+      logger.error("❌ Error fetching users:", error.message);
+      res.status(500).json({ error: "Error al buscar usuarios" });
     }
-
-    query += ` ORDER BY name ASC`;
-    const result = await pool.query(query, params);
-
-    const users = result.rows.map((user) => ({
-      ...user,
-      name: inputProtect.escapeOutput(user.name),
-      email: inputProtect.escapeOutput(user.email),
-      image: user.image
-        ? user.image.startsWith("http")
-          ? user.image
-          : `${BASE_URL}${user.image}`
-        : null,
-    }));
-
-    res.json({ users });
-  } catch (error) {
-    logger.error("❌ Error fetching users:", error.message);
-    res.status(500).json({ error: "Error al buscar usuarios" });
   }
-});
+);
 
 // Eliminar usuario
-router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const userId = inputProtect.sanitizeNumeric(req.params.id);
+router.delete(
+  "/users/:id",
+  verifyToken,
+  requireAdmin,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      const userId = inputProtect.sanitizeNumeric(req.params.id);
 
-    if (userId === req.user.id) {
-      return res
-        .status(400)
-        .json({ error: "No puedes eliminar tu propia cuenta" });
+      if (userId === req.user.id) {
+        return res
+          .status(400)
+          .json({ error: "No puedes eliminar tu propia cuenta" });
+      }
+
+      if (req.user.role !== "admin") {
+        return res
+          .status(403)
+          .json({ message: "Solo administradores pueden eliminar cuentas" });
+      }
+
+      const adminCountResult = await pool.query(
+        "SELECT COUNT(*) FROM users WHERE role = 'admin'"
+      );
+      const adminCount = parseInt(adminCountResult.rows[0].count, 10);
+
+      const deletingUser = await pool.query(
+        "SELECT role FROM users WHERE id = $1",
+        [userId]
+      );
+      const deletingRole = deletingUser.rows[0]?.role;
+
+      const isLastAdmin =
+        deletingRole === "admin" &&
+        adminCount === 1 &&
+        req.user.role === "admin";
+
+      if (isLastAdmin) {
+        return res
+          .status(400)
+          .json({ error: "No puedes eliminar el último administrador" });
+      }
+
+      const result = await pool.query(
+        "DELETE FROM users WHERE id = $1 RETURNING id",
+        [userId]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      logger.log("✅ Usuario eliminado:", userId);
+      res.json({ success: true });
+    } catch (error) {
+      logger.error("❌ Error deleting user:", error.message);
+      res.status(500).json({ error: "Error al eliminar usuario" });
     }
-
-    const adminCountResult = await pool.query(
-      "SELECT COUNT(*) FROM users WHERE role = 'admin'"
-    );
-    const adminCount = parseInt(adminCountResult.rows[0].count, 10);
-
-    const deletingUser = await pool.query(
-      "SELECT role FROM users WHERE id = $1",
-      [userId]
-    );
-    const deletingRole = deletingUser.rows[0]?.role;
-
-    const isLastAdmin =
-      deletingRole === "admin" && adminCount === 1 && req.user.role === "admin";
-
-    if (isLastAdmin) {
-      return res
-        .status(400)
-        .json({ error: "No puedes eliminar el último administrador" });
-    }
-
-    const result = await pool.query(
-      "DELETE FROM users WHERE id = $1 RETURNING id",
-      [userId]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    logger.log("✅ Usuario eliminado:", userId);
-    res.json({ success: true });
-  } catch (error) {
-    logger.error("❌ Error deleting user:", error.message);
-    res.status(500).json({ error: "Error al eliminar usuario" });
   }
-});
+);
 
 // Perfil completo del usuario
-router.get("/users/:userId", verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const userId = inputProtect.sanitizeNumeric(req.params.userId);
+router.get(
+  "/users/:userId",
+  verifyToken,
+  requireAdminOrViewer,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      const userId = inputProtect.sanitizeNumeric(req.params.userId);
 
-    const result = await pool.query(
-      `SELECT id, name, email, phone_number, role, image, auth_provider, address, created_at 
+      const result = await pool.query(
+        `SELECT id, name, email, phone_number, role, image, auth_provider, address, created_at 
        FROM users WHERE id = $1`,
-      [userId]
-    );
+        [userId]
+      );
 
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      const user = result.rows[0];
+      user.name = inputProtect.escapeOutput(user.name);
+      user.email = inputProtect.escapeOutput(user.email);
+
+      if (user.image && !user.image.startsWith("http")) {
+        user.image = `${BASE_URL}${user.image}`;
+      }
+
+      res.json(user);
+    } catch (err) {
+      logger.error("❌ Error fetching user profile:", err.message);
+      res.status(500).json({ error: "Error al obtener perfil del usuario" });
     }
-
-    const user = result.rows[0];
-    user.name = inputProtect.escapeOutput(user.name);
-    user.email = inputProtect.escapeOutput(user.email);
-
-    if (user.image && !user.image.startsWith("http")) {
-      user.image = `${BASE_URL}${user.image}`;
-    }
-
-    res.json(user);
-  } catch (err) {
-    logger.error("❌ Error fetching user profile:", err.message);
-    res.status(500).json({ error: "Error al obtener perfil del usuario" });
   }
-});
+);
 
 // Historial de compras de un usuario
 router.get(
   "/users/:userId/historial",
   verifyToken,
-  requireAdmin,
+  requireAdminOrViewer,
+  checkAccountLock,
   async (req, res) => {
     try {
       const userId = inputProtect.sanitizeNumeric(req.params.userId);
@@ -191,42 +220,50 @@ router.get(
 );
 
 // Cambiar rol de usuario
-router.put("/users/:id/role", verifyToken, requireAdmin, async (req, res) => {
-  try {
-    const userId = inputProtect.sanitizeNumeric(req.params.id);
-    const newRole = inputProtect.sanitizeString(req.body.role);
+router.put(
+  "/users/:id/role",
+  verifyToken,
+  requireAdmin,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      const userId = inputProtect.sanitizeNumeric(req.params.id);
+      const newRole = inputProtect.sanitizeString(req.body.role);
 
-    if (!["admin", "user"].includes(newRole)) {
-      return res
-        .status(400)
-        .json({ error: "Rol inválido. Debe ser 'admin' o 'user'" });
+      const validRoles = ["user", "admin", "viewer"];
+      if (!validRoles.includes(newRole)) {
+        return res.status(400).json({ error: "Rol inválido" });
+      }
+
+      if (userId === req.user.id) {
+        return res
+          .status(400)
+          .json({ error: "No puedes cambiar tu propio rol" });
+      }
+
+      const result = await pool.query(
+        "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role",
+        [newRole, userId]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      res.json({ success: true, user: result.rows[0] });
+    } catch (error) {
+      logger.error("❌ Error updating user role:", error.message);
+      res.status(500).json({ error: "Error al cambiar rol" });
     }
-
-    if (userId === req.user.id) {
-      return res.status(400).json({ error: "No puedes cambiar tu propio rol" });
-    }
-
-    const result = await pool.query(
-      "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role",
-      [newRole, userId]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    res.json({ success: true, user: result.rows[0] });
-  } catch (error) {
-    logger.error("❌ Error updating user role:", error.message);
-    res.status(500).json({ error: "Error al cambiar rol" });
   }
-});
+);
 
 // Ventas por mes
 router.get(
   "/stats/sales-by-month",
   verifyToken,
-  requireAdmin,
+  requireAdminOrViewer,
+  checkAccountLock,
   async (req, res) => {
     try {
       const result = await pool.query(`
@@ -250,7 +287,8 @@ router.get(
 router.get(
   "/stats/top-products",
   verifyToken,
-  requireAdmin,
+  requireAdminOrViewer,
+  checkAccountLock,
   async (req, res) => {
     try {
       const result = await pool.query(`
@@ -278,7 +316,8 @@ router.get(
 router.get(
   "/stats/users-by-month",
   verifyToken,
-  requireAdmin,
+  requireAdminOrViewer,
+  checkAccountLock,
   async (req, res) => {
     try {
       const result = await pool.query(`
@@ -301,7 +340,8 @@ router.get(
 router.patch(
   "/change-order/:id/status",
   verifyToken,
-  requireAdmin,
+  requireAdminOrViewer,
+  checkAccountLock,
   async (req, res) => {
     try {
       const id = inputProtect.sanitizeNumeric(req.params.id);
@@ -333,6 +373,45 @@ router.patch(
       res.status(500).json({ error: "Error interno del servidor" });
     }
   }
+);
+
+router.get(
+  "/security/users",
+  verifyToken,
+  requireAdminOrViewer,
+  getUsersSecurity
+);
+router.get(
+  "/security/stats",
+  verifyToken,
+  requireAdminOrViewer,
+  getSecurityStats
+);
+router.get(
+  "/security/logs/export",
+  verifyToken,
+  requireAdminOrViewer,
+  exportLogs
+);
+
+router.post(
+  "/security/users/:id/unlock",
+  verifyToken,
+  requireAdmin,
+  unlockUser
+);
+router.post("/security/users/:id/lock", verifyToken, requireAdmin, lockUser);
+router.post(
+  "/security/users/:id/reset-attempts",
+  verifyToken,
+  requireAdmin,
+  resetAttempts
+);
+router.get(
+  "/security/users/:id/details",
+  verifyToken,
+  requireAdminOrViewer,
+  getSecurityDetails
 );
 
 export default router;

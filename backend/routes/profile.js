@@ -8,6 +8,7 @@ import { verifyToken } from "../middleware/jwt.js";
 import logger from "../utils/logger.js";
 import { fileURLToPath } from "url";
 import inputProtect from "../middleware/inputProtect.js";
+import checkAccountLock from "../middleware/checkAccount.js";
 import { fileTypeFromFile } from "file-type";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -69,6 +70,7 @@ router.use((req, res, next) => {
 router.post(
   "/profile-image",
   verifyToken,
+  checkAccountLock,
   upload.single("profileImage"),
   async (req, res, next) => {
     try {
@@ -126,61 +128,71 @@ router.post(
 );
 
 // GET /api/user/profile - Obtener datos del perfil
-router.get("/profile", verifyToken, async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const result = await pool.query(
-      `SELECT name, email, phone_number, role, image, auth_provider, address, created_at FROM users WHERE id = $1`,
-      [userId]
-    );
+router.get(
+  "/profile",
+  verifyToken,
+  checkAccountLock,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
+      const result = await pool.query(
+        `SELECT name, email, phone_number, role, image, auth_provider, address, created_at FROM users WHERE id = $1`,
+        [userId]
+      );
 
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      const user = result.rows[0];
+      user.image = user.image ? `${BASE_URL}${user.image}` : null;
+
+      res.json(user);
+    } catch (err) {
+      logger.error("❌ Error fetching profile:", err.message);
+      next(err);
     }
-
-    const user = result.rows[0];
-    user.image = user.image ? `${BASE_URL}${user.image}` : null;
-
-    res.json(user);
-  } catch (err) {
-    logger.error("❌ Error fetching profile:", err.message);
-    next(err);
   }
-});
+);
 
 // DELETE /api/user/delete-image - Eliminar imagen de perfil
-router.delete("/delete-image", verifyToken, async (req, res, next) => {
-  try {
-    const userId = req.user.id;
+router.delete(
+  "/delete-image",
+  verifyToken,
+  checkAccountLock,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
 
-    const result = await pool.query(`SELECT image FROM users WHERE id = $1`, [
-      userId,
-    ]);
+      const result = await pool.query(`SELECT image FROM users WHERE id = $1`, [
+        userId,
+      ]);
 
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    const currentImage = result.rows[0].image;
-    if (currentImage) {
-      const filePath = path.join(__dirname, "../../", currentImage);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        logger.log(`📁 Archivo eliminado: ${filePath}`);
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
       }
+
+      const currentImage = result.rows[0].image;
+      if (currentImage) {
+        const filePath = path.join(__dirname, "../../", currentImage);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          logger.log(`📁 Archivo eliminado: ${filePath}`);
+        }
+      }
+
+      await pool.query(`UPDATE users SET image = NULL WHERE id = $1`, [userId]);
+
+      res.json({ message: "Imagen de perfil eliminada correctamente" });
+    } catch (err) {
+      logger.error("❌ Error deleting profile image:", err.message);
+      next(err);
     }
-
-    await pool.query(`UPDATE users SET image = NULL WHERE id = $1`, [userId]);
-
-    res.json({ message: "Imagen de perfil eliminada correctamente" });
-  } catch (err) {
-    logger.error("❌ Error deleting profile image:", err.message);
-    next(err);
   }
-});
+);
 
 // PUT /api/user/profile - Actualizar datos del perfil
-router.put("/update", verifyToken, async (req, res, next) => {
+router.put("/update", verifyToken, checkAccountLock, async (req, res, next) => {
   try {
     const userId = req.user.id;
     const name = inputProtect.sanitizeString(req.body.name || "");
@@ -210,119 +222,135 @@ router.put("/update", verifyToken, async (req, res, next) => {
 });
 
 // PUT /api/user/shipping-address - Actualizar dirección de envío en users
-router.put("/update/shipping-address", verifyToken, async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const { line1, city, country, postal_code, state } = req.body;
+router.put(
+  "/update/shipping-address",
+  verifyToken,
+  checkAccountLock,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
+      const { line1, city, country, postal_code, state } = req.body;
 
-    if (!line1 || !city || !country) {
-      return res
-        .status(400)
-        .json({ error: "Calle, ciudad y país son requeridos" });
-    }
+      if (!line1 || !city || !country) {
+        return res
+          .status(400)
+          .json({ error: "Calle, ciudad y país son requeridos" });
+      }
 
-    const checkResult = await pool.query(
-      `SELECT address FROM users WHERE id = $1`,
-      [userId]
-    );
+      const checkResult = await pool.query(
+        `SELECT address FROM users WHERE id = $1`,
+        [userId]
+      );
 
-    if (!checkResult.rows[0] || !checkResult.rows[0].address) {
-      return res.status(400).json({
-        error:
-          "No hay dirección existente para actualizar. Usa POST para crear una nueva.",
+      if (!checkResult.rows[0] || !checkResult.rows[0].address) {
+        return res.status(400).json({
+          error:
+            "No hay dirección existente para actualizar. Usa POST para crear una nueva.",
+        });
+      }
+
+      const newAddress = {
+        line1: inputProtect.sanitizeString(line1),
+        city: inputProtect.sanitizeString(city),
+        country: inputProtect.sanitizeString(country),
+        postal_code: inputProtect.sanitizeString(postal_code || ""),
+        state: inputProtect.sanitizeString(state || ""),
+      };
+
+      const result = await pool.query(
+        `UPDATE users SET address = $1 WHERE id = $2 RETURNING address`,
+        [newAddress, userId]
+      );
+
+      res.json({
+        message: "Dirección de envío actualizada correctamente",
+        address: result.rows[0].address,
       });
+    } catch (err) {
+      logger.error("❌ Error updating shipping address:", err.message);
+      next(err);
     }
-
-    const newAddress = {
-      line1: inputProtect.sanitizeString(line1),
-      city: inputProtect.sanitizeString(city),
-      country: inputProtect.sanitizeString(country),
-      postal_code: inputProtect.sanitizeString(postal_code || ""),
-      state: inputProtect.sanitizeString(state || ""),
-    };
-
-    const result = await pool.query(
-      `UPDATE users SET address = $1 WHERE id = $2 RETURNING address`,
-      [newAddress, userId]
-    );
-
-    res.json({
-      message: "Dirección de envío actualizada correctamente",
-      address: result.rows[0].address,
-    });
-  } catch (err) {
-    logger.error("❌ Error updating shipping address:", err.message);
-    next(err);
   }
-});
+);
 
 // POST /api/user/shipping-address - Crear una nueva dirección de envío
-router.post("/add/shipping-address", verifyToken, async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const { line1, city, country, postal_code, state } = req.body;
+router.post(
+  "/add/shipping-address",
+  verifyToken,
+  checkAccountLock,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
+      const { line1, city, country, postal_code, state } = req.body;
 
-    if (!line1 || !city || !country) {
-      return res
-        .status(400)
-        .json({ error: "Calle, ciudad y país son requeridos" });
+      if (!line1 || !city || !country) {
+        return res
+          .status(400)
+          .json({ error: "Calle, ciudad y país son requeridos" });
+      }
+
+      const checkResult = await pool.query(
+        `SELECT address FROM users WHERE id = $1`,
+        [userId]
+      );
+
+      if (checkResult.rows[0] && checkResult.rows[0].address) {
+        return res.status(400).json({
+          error: "Ya existe una dirección. Usa PUT para actualizarla.",
+        });
+      }
+
+      const newAddress = {
+        line1: inputProtect.sanitizeString(line1),
+        city: inputProtect.sanitizeString(city),
+        country: inputProtect.sanitizeString(country),
+        postal_code: inputProtect.sanitizeString(postal_code || ""),
+        state: inputProtect.sanitizeString(state || ""),
+      };
+
+      const result = await pool.query(
+        `UPDATE users SET address = $1 WHERE id = $2 RETURNING address`,
+        [newAddress, userId]
+      );
+
+      res.status(201).json({
+        message: "Dirección de envío creada correctamente",
+        address: result.rows[0].address,
+      });
+    } catch (err) {
+      logger.error("❌ Error creating shipping address:", err.message);
+      next(err);
     }
-
-    const checkResult = await pool.query(
-      `SELECT address FROM users WHERE id = $1`,
-      [userId]
-    );
-
-    if (checkResult.rows[0] && checkResult.rows[0].address) {
-      return res
-        .status(400)
-        .json({ error: "Ya existe una dirección. Usa PUT para actualizarla." });
-    }
-
-    const newAddress = {
-      line1: inputProtect.sanitizeString(line1),
-      city: inputProtect.sanitizeString(city),
-      country: inputProtect.sanitizeString(country),
-      postal_code: inputProtect.sanitizeString(postal_code || ""),
-      state: inputProtect.sanitizeString(state || ""),
-    };
-
-    const result = await pool.query(
-      `UPDATE users SET address = $1 WHERE id = $2 RETURNING address`,
-      [newAddress, userId]
-    );
-
-    res.status(201).json({
-      message: "Dirección de envío creada correctamente",
-      address: result.rows[0].address,
-    });
-  } catch (err) {
-    logger.error("❌ Error creating shipping address:", err.message);
-    next(err);
   }
-});
+);
 
 // GET /api/user/shipping-address - Obtener la dirección de envío del usuario
-router.get("/shipping-address", verifyToken, async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const result = await pool.query(`SELECT address FROM users WHERE id = $1`, [
-      userId,
-    ]);
+router.get(
+  "/shipping-address",
+  verifyToken,
+  checkAccountLock,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
+      const result = await pool.query(
+        `SELECT address FROM users WHERE id = $1`,
+        [userId]
+      );
 
-    if (!result.rows[0] || !result.rows[0].address) {
-      return res.json({ address: null });
+      if (!result.rows[0] || !result.rows[0].address) {
+        return res.json({ address: null });
+      }
+
+      res.json({ address: result.rows[0].address });
+    } catch (err) {
+      logger.error("❌ Error fetching shipping address:", err.message);
+      next(err);
     }
-
-    res.json({ address: result.rows[0].address });
-  } catch (err) {
-    logger.error("❌ Error fetching shipping address:", err.message);
-    next(err);
   }
-});
+);
 
 // POST - Crear reseña
-router.post("/reviews", verifyToken, async (req, res) => {
+router.post("/reviews", verifyToken, checkAccountLock, async (req, res) => {
   try {
     const raw = req.body;
     const orderId = inputProtect.sanitizeNumeric(raw.orderId);
@@ -400,35 +428,40 @@ router.get("/reviews", async (req, res) => {
 });
 
 // 🔹 Verificar si una orden ya tiene reseña
-router.get("/reviews/order/:orderId", verifyToken, async (req, res) => {
-  try {
-    const orderId = parseInt(inputProtect.sanitizeString(req.params.orderId));
-    const userId = req.user.id;
-    if (!Number.isInteger(orderId) || orderId <= 0) {
-      return res.status(400).json({ error: "orderId inválido" });
+router.get(
+  "/reviews/order/:orderId",
+  verifyToken,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      const orderId = parseInt(inputProtect.sanitizeString(req.params.orderId));
+      const userId = req.user.id;
+      if (!Number.isInteger(orderId) || orderId <= 0) {
+        return res.status(400).json({ error: "orderId inválido" });
+      }
+
+      const result = await pool.query(
+        "SELECT rating, comment FROM reviews WHERE order_id = $1 AND user_id = $2 LIMIT 1",
+        [orderId, userId]
+      );
+
+      if (result.rows.length > 0) {
+        return res.json({
+          hasReview: true,
+          review: result.rows[0],
+        });
+      }
+
+      res.json({ hasReview: false });
+    } catch (error) {
+      logger.error("Error al obtener reseña:", error);
+      res.status(500).json({ error: "Error al obtener reseña" });
     }
-
-    const result = await pool.query(
-      "SELECT rating, comment FROM reviews WHERE order_id = $1 AND user_id = $2 LIMIT 1",
-      [orderId, userId]
-    );
-
-    if (result.rows.length > 0) {
-      return res.json({
-        hasReview: true,
-        review: result.rows[0],
-      });
-    }
-
-    res.json({ hasReview: false });
-  } catch (error) {
-    logger.error("Error al obtener reseña:", error);
-    res.status(500).json({ error: "Error al obtener reseña" });
   }
-});
+);
 
 // Cambio de contraseña
-router.put("/password", verifyToken, async (req, res) => {
+router.put("/password", verifyToken, checkAccountLock, async (req, res) => {
   try {
     const currentPassword = inputProtect.sanitizeString(
       req.body.currentPassword || ""

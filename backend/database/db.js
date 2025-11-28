@@ -1,5 +1,5 @@
 import pkg from "pg";
-import logger from "../utils/logger.js";
+import logger, { initializeLogger } from "../utils/logger.js";
 import {
   DB_HOST,
   DB_USER,
@@ -33,6 +33,8 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000,
   ssl: NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
+
+initializeLogger(pool);
 
 logger.log("🛠️ Verificando configuración de base de datos:");
 logger.log(`Host: ${DB_HOST}`);

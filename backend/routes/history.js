@@ -3,10 +3,11 @@ import pool from "../database/db.js";
 import { verifyToken } from "../middleware/jwt.js";
 import logger from "../utils/logger.js";
 import inputProtect from "../middleware/inputProtect.js";
+import checkAccountLock from "../middleware/checkAccount.js";
 
 const router = express.Router();
 
-router.get("/historial", verifyToken, async (req, res) => {
+router.get("/historial", verifyToken, checkAccountLock, async (req, res) => {
   try {
     const userId = inputProtect.sanitizeNumeric(req.user.id);
 

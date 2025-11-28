@@ -66,7 +66,7 @@ export function generateToken(user, res) {
       id: user.id,
       name: inputProtect.escapeOutput(user.name),
       email: inputProtect.escapeOutput(user.email),
-      role: user.role,
+      role: inputProtect.escapeOutput(user.role),
       iat: Math.floor(Date.now() / 1000),
     };
 
@@ -77,6 +77,7 @@ export function generateToken(user, res) {
       expiresIn: "1h",
       issuer: "cafe-aroma.com",
       audience: user.email,
+      notBefore: "2s",
     };
 
     const token = jwt.sign(payload, secret, options);

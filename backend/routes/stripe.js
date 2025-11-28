@@ -5,6 +5,7 @@ import pool from "../database/db.js";
 import logger from "../utils/logger.js";
 import { verifyToken } from "../middleware/jwt.js";
 import inputProtect from "../middleware/inputProtect.js";
+import checkAccountLock from "../middleware/checkAccount.js";
 import {
   STRIPE_SECRET_KEY,
   FRONTEND_URL,
@@ -165,29 +166,47 @@ router.post(
 router.use(express.json());
 
 // Obtener detalles de una compra desde el session_id
-router.get("/stripe/purchase/:session_id", verifyToken, async (req, res) => {
-  const { session_id } = req.params;
+router.get(
+  "/stripe/purchase/:session_id",
+  verifyToken,
+  checkAccountLock,
+  async (req, res) => {
+    const { session_id } = req.params;
 
-  try {
-    const result = await pool.query(
-      `SELECT c.id, c.producto, c.precio, c.fecha, c.status, c.phone, c.shipping_address, c.image,
+    try {
+      const result = await pool.query(
+        `SELECT c.id, c.producto, c.precio, c.fecha, c.status, c.phone, 
+              c.shipping_address, c.image, c.user_id,
               u.name AS usuario, u.email AS email
        FROM compras c
        JOIN users u ON c.user_id = u.id
-       WHERE c.stripe_session_id = $1`,
-      [session_id]
-    );
+       WHERE c.stripe_session_id = $1
+       LIMIT 1`,
+        [session_id]
+      );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Compra no encontrada" });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Compra no encontrada" });
+      }
+
+      const compra = result.rows[0];
+
+      if (compra.user_id !== req.user.id) {
+        logger.warn(
+          `Acceso denegado: usuario ${req.user.id} intentó ver compra ajena de ${session_id}.`
+        );
+        return res.status(403).json({
+          error: "No tienes permiso para ver esta compra",
+        });
+      }
+
+      res.json(compra);
+    } catch (error) {
+      logger.error("❌ Error obteniendo detalles de la compra:", error.message);
+      res.status(500).json({ error: "Error interno del servidor" });
     }
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    logger.error("❌ Error obteniendo detalles de la compra:", error.message);
-    res.status(500).json({ error: "Error interno del servidor" });
   }
-});
+);
 
 // --- Función para enviar SMS al admin ---
 async function sendAdminNotification(
@@ -240,46 +259,54 @@ async function sendUserNotification(
 }
 
 // Crear sesión de checkout para compra única
-router.post("/create-checkout-session", verifyToken, async (req, res) => {
-  try {
-    const { priceId } = inputProtect.sanitizeObjectRecursivelyServer(req.body);
+router.post(
+  "/create-checkout-session",
+  verifyToken,
+  checkAccountLock,
+  async (req, res) => {
+    try {
+      const { priceId } = inputProtect.sanitizeObjectRecursivelyServer(
+        req.body
+      );
 
-    const userData = await pool.query("SELECT email FROM users WHERE id = $1", [
-      req.user.id,
-    ]);
-    const customer_email = userData.rows[0]?.email;
+      const userData = await pool.query(
+        "SELECT email FROM users WHERE id = $1",
+        [req.user.id]
+      );
+      const customer_email = userData.rows[0]?.email;
 
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ error: "Usuario no autenticado" });
-    }
-    if (!priceId || !customer_email) {
-      return res.status(400).json({ error: "Datos incompletos" });
-    }
-    if (!inputProtect.validateEmailServer(customer_email)) {
-      return res.status(400).json({ error: "Correo inválido" });
-    }
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Usuario no autenticado" });
+      }
+      if (!priceId || !customer_email) {
+        return res.status(400).json({ error: "Datos incompletos" });
+      }
+      if (!inputProtect.validateEmailServer(customer_email)) {
+        return res.status(400).json({ error: "Correo inválido" });
+      }
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${FRONTEND_URL}/successfullPayment?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${FRONTEND_URL}/paymentCanceled`,
-      customer_email,
-      billing_address_collection: "auto",
-      shipping_address_collection: {
-        allowed_countries: ["CO"],
-      },
-      metadata: {
-        user_id: req.user.id.toString(),
-      },
-    });
-    res.json({ url: session.url });
-  } catch (error) {
-    logger.error("❌ Error creating checkout session:", error.message);
-    res.status(500).json({ error: "No se pudo crear la sesión de pago" });
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${FRONTEND_URL}/successfullPayment?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${FRONTEND_URL}/paymentCanceled`,
+        customer_email,
+        billing_address_collection: "auto",
+        shipping_address_collection: {
+          allowed_countries: ["CO"],
+        },
+        metadata: {
+          user_id: req.user.id.toString(),
+        },
+      });
+      res.json({ url: session.url });
+    } catch (error) {
+      logger.error("❌ Error creating checkout session:", error.message);
+      res.status(500).json({ error: "No se pudo crear la sesión de pago" });
+    }
   }
-});
+);
 
 // Stripe - Productos
 router.get("/products", async (req, res, next) => {

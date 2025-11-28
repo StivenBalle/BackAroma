@@ -106,6 +106,14 @@ export async function securityMiddlewares(app) {
     helmet({
       crossOriginEmbedderPolicy: false,
       crossOriginResourcePolicy: { policy: "cross-origin" },
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "https:"],
+        },
+      },
     })
   );
 
@@ -117,6 +125,7 @@ export async function securityMiddlewares(app) {
     message: "Demasiadas peticiones, intenta de nuevo más tarde.",
     standardHeaders: true,
     legacyHeaders: false,
+    skipSuccessfulRequests: true,
   });
   app.use("/api/", limiter);
 

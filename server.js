@@ -15,6 +15,7 @@ import googleAuthRoutes from "./backend/routes/loginGoogle.js";
 import profileRoutes from "./backend/routes/profile.js";
 import logger from "./backend/utils/logger.js";
 import { securityMiddlewares } from "./backend/middleware/inputProtect.js";
+import logsRoutes from "./backend/routes/logs.routes.js";
 import {
   FRONTEND_URL,
   NODE_ENV,
@@ -70,7 +71,10 @@ app.use(cookieParser());
 
 // --- Logger ---
 app.use((req, res, next) => {
-  logger.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  const ip = getClientIp(req);
+  logger.log(
+    `[${new Date().toISOString()}] ${req.method} ${req.url} - IP: ${ip}`
+  );
   next();
 });
 
@@ -85,6 +89,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api", historyRoutes);
 app.use("/api", googleAuthRoutes);
 app.use("/api/user", profileRoutes);
+app.use("/api/logs", logsRoutes);
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Stripe - Configuración pública
@@ -111,6 +116,25 @@ app.use((req, res, next) => {
 });
 
 app.use(errorHandler);
+
+function getClientIp(req) {
+  const xForwardedFor = req.headers["x-forwarded-for"];
+
+  if (xForwardedFor) {
+    const ips = xForwardedFor.split(",").map((ip) => ip.trim());
+    return ips[0];
+  }
+
+  return (
+    req.ip ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    (req.connection &&
+      req.connection.socket &&
+      req.connection.socket.remoteAddress) ||
+    "IP_DESCONOCIDA"
+  );
+}
 
 // --- Iniciar servidor ---
 const PORT = PORTG || 3000;

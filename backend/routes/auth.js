@@ -6,6 +6,7 @@ import logger from "../utils/logger.js";
 import { NODE_ENV } from "../utils/config.js";
 import pool from "../database/db.js";
 import inputProtect from "../middleware/inputProtect.js";
+import checkAccountLock from "../middleware/checkAccount.js";
 
 const router = express.Router();
 
@@ -14,9 +15,9 @@ router.post("/login", async (req, res) => {
   let { email, password } = req.body;
 
   email = inputProtect.validateEmailServer(email);
-  password = inputProtect.validatePasswordServer(password);
+  password = typeof password === "string" ? password.trim() : "";
 
-  if (!email || !password) {
+  if (!email || !password || password.length < 1) {
     return res
       .status(400)
       .json({ error: "Email y contraseña son obligatorios." });
@@ -25,10 +26,44 @@ router.post("/login", async (req, res) => {
   try {
     const user = await loginUser(email, password);
     generateToken(user, res);
-    res.json({ message: "✅ Login exitoso", user });
+    return res.json({
+      message: "Login exitoso",
+      user,
+    });
   } catch (error) {
-    logger.error("❌ Error logging in:", error);
-    res.status(401).json({ error: "Credenciales inválidas" });
+    logger.warn("❌ Error logging in:", error);
+
+    if (error.code === "ACCOUNT_PERMANENTLY_LOCKED") {
+      return res.status(423).json({
+        error: error.message || "Cuenta bloqueada permanentemente",
+        code: error.code,
+        lock_reason: error.lock_reason,
+        isPermanent: true,
+      });
+    }
+
+    if (error.code === "ACCOUNT_LOCKED") {
+      return res.status(423).json({
+        error: error.message || "Cuenta bloqueada",
+        code: error.code,
+        remainingMin: error.remainingMin || 15,
+        lockedUntil: error.lockedUntil,
+      });
+    }
+
+    if (error.code === "INVALID_PASSWORD") {
+      return res.status(401).json({
+        error: error.message,
+        code: error.code,
+        attempts: error.attempts,
+        remaining: error.remaining,
+        maxAttempts: error.maxAttempts || 5,
+      });
+    }
+
+    return res.status(401).json({
+      error: error.message || "Credenciales inválidas",
+    });
   }
 });
 
@@ -43,7 +78,7 @@ router.post("/logout", (req, res) => {
 });
 
 // PERFIL
-router.get("/profile", verifyToken, async (req, res) => {
+router.get("/profile", verifyToken, checkAccountLock, async (req, res) => {
   try {
     const userId = inputProtect.sanitizeNumeric(req.user.id);
 
@@ -136,7 +171,7 @@ router.post("/register", async (req, res) => {
 });
 
 // ACTUALIZAR TELÉFONO
-router.put("/update-phone", verifyToken, async (req, res) => {
+router.put("/update-phone", verifyToken, checkAccountLock, async (req, res) => {
   const rawPhone = req.body.phone_number;
   const userId = inputProtect.sanitizeNumeric(req.user.id);
   const phone_number = inputProtect.sanitizeNumeric(rawPhone);
