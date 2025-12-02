@@ -1,5 +1,6 @@
 import pool from "../database/db.js";
 import logger from "../utils/logger.js";
+import inputProtect from "../middleware/inputProtect.js";
 
 export const getUsersSecurity = async (req, res) => {
   try {
@@ -314,5 +315,88 @@ export const exportLogs = async (req, res) => {
   } catch (err) {
     logger.error(err);
     res.status(500).json({ error: "Error" });
+  }
+};
+
+export const changeRolUser = async (req, res) => {
+  try {
+    const userId = inputProtect.sanitizeNumeric(req.params.id);
+    const newRole = inputProtect.sanitizeString(req.body.role);
+
+    const validRoles = ["user", "admin", "viewer"];
+    if (!validRoles.includes(newRole)) {
+      return res.status(400).json({ error: "Rol inválido" });
+    }
+
+    if (userId === req.user.id) {
+      return res.status(400).json({ error: "No puedes cambiar tu propio rol" });
+    }
+
+    const result = await pool.query(
+      "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role",
+      [newRole, userId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    res.json({ success: true, user: result.rows[0] });
+  } catch (error) {
+    logger.error("❌ Error updating user role:", error.message);
+    res.status(500).json({ error: "Error al cambiar rol" });
+  }
+};
+
+export const deleteUser = async (req, res) => {
+  try {
+    const userId = inputProtect.sanitizeNumeric(req.params.id);
+
+    if (userId === req.user.id) {
+      return res
+        .status(400)
+        .json({ error: "No puedes eliminar tu propia cuenta" });
+    }
+
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ message: "Solo administradores pueden eliminar cuentas" });
+    }
+
+    const adminCountResult = await pool.query(
+      "SELECT COUNT(*) FROM users WHERE role = 'admin'"
+    );
+    const adminCount = parseInt(adminCountResult.rows[0].count, 10);
+
+    const deletingUser = await pool.query(
+      "SELECT role FROM users WHERE id = $1",
+      [userId]
+    );
+    const deletingRole = deletingUser.rows[0]?.role;
+
+    const isLastAdmin =
+      deletingRole === "admin" && adminCount === 1 && req.user.role === "admin";
+
+    if (isLastAdmin) {
+      return res
+        .status(400)
+        .json({ error: "No puedes eliminar el último administrador" });
+    }
+
+    const result = await pool.query(
+      "DELETE FROM users WHERE id = $1 RETURNING id",
+      [userId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    logger.log("✅ Usuario eliminado:", userId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error("❌ Error deleting user:", error.message);
+    res.status(500).json({ error: "Error al eliminar usuario" });
   }
 };
