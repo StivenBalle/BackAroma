@@ -15,6 +15,8 @@ import googleAuthRoutes from "./backend/routes/loginGoogle.js";
 import profileRoutes from "./backend/routes/profile.js";
 import logger from "./backend/utils/logger.js";
 import { securityMiddlewares } from "./backend/middleware/inputProtect.js";
+import swaggerUI from "swagger-ui-express";
+import swaggerSpec from "./backend/utils/swagger.js";
 import logsRoutes from "./backend/routes/logs.routes.js";
 import {
   FRONTEND_URL,
@@ -77,7 +79,7 @@ app.use((req, res, next) => {
   );
   next();
 });
-
+app.use("/api-docs", swaggerUI.serve, swaggerUI.setup(swaggerSpec));
 app.use("/api", stripeRoutes);
 
 await securityMiddlewares(app);

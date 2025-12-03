@@ -1,6 +1,7 @@
 import pool from "../database/db.js";
 import logger from "../utils/logger.js";
 import bcrypt from "bcrypt";
+import multer from "multer";
 import path from "path";
 import fs from "fs";
 import inputProtect from "../middleware/inputProtect.js";
@@ -10,6 +11,11 @@ import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// ====== MULTER CONFIG ======
+const uploadDir = path.join(__dirname, "../../uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 const BASE_URL =
   NODE_ENV === "production"
     ? "https://backendaromaserrania.onrender.com"
