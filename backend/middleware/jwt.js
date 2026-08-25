@@ -32,7 +32,7 @@ export const verifyToken = async (req, res, next) => {
 
     const result = await pool.query(
       "SELECT id, email, role FROM users WHERE id = $1",
-      [decoded.id]
+      [decoded.id],
     );
 
     if (!result.rows[0]) {
@@ -84,7 +84,7 @@ export function generateToken(user, res) {
 
     res.cookie("access_token", token, {
       httpOnly: true,
-      secure: NODE_ENV === "development",
+      secure: NODE_ENV === "production",
       sameSite: NODE_ENV === "production" ? "none" : "lax",
       path: "/",
       maxAge: 1000 * 60 * 60,
