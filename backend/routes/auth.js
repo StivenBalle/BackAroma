@@ -72,7 +72,7 @@ router.post("/login", userLogin);
 router.post("/logout", (req, res) => {
   res.clearCookie("access_token", {
     httpOnly: true,
-    secure: NODE_ENV === "development",
+    secure: NODE_ENV === "production",
     sameSite: "none",
   });
   res.json({ message: "✅ Logout exitoso" });
